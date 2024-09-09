@@ -12,7 +12,7 @@ log.setLevel(logging.DEBUG)
 
 
 def extract2d(input_model,
-              slit_name=None,
+              slit_names=None,
               reference_files={},
               grism_objects=None,
               tsgrism_extract_height=None,
@@ -27,8 +27,8 @@ def extract2d(input_model,
     ----------
     input_model : `~jwst.datamodels.ImageModel` or `~jwst.datamodels.CubeModel`
         Input data model.
-    slit_name : str or int
-        Slit name.
+    slit_names : list
+        Slit names.
     reference_files : dict
         Reference files.
     grism_objects : list
@@ -66,7 +66,7 @@ def extract2d(input_model,
             log.info(f'EXP_TYPE {exp_type} with grating=MIRROR not supported for extract 2D')
             input_model.meta.cal_step.extract_2d = 'SKIPPED'
             return input_model
-        output_model = nrs_extract2d(input_model, slit_name=slit_name)
+        output_model = nrs_extract2d(input_model, slit_names=slit_names)
     elif exp_type in slitless_modes:
         if exp_type == 'NRC_TSGRISM':
             if tsgrism_extract_height is None:

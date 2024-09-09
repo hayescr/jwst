@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 
-def nrs_extract2d(input_model, slit_name=None):
+def nrs_extract2d(input_model, slit_names=None):
     """
     Main extract_2d function for NIRSpec exposures.
 
@@ -26,8 +26,8 @@ def nrs_extract2d(input_model, slit_name=None):
     ----------
     input_model : `~jwst.datamodels.ImageModel` or `~jwst.datamodels.CubeModel`
         Input data model.
-    slit_name : str or int
-        Slit name.
+    slit_names : list
+        Slit names.
     """
     exp_type = input_model.meta.exposure.type.upper()
 
@@ -45,15 +45,15 @@ def nrs_extract2d(input_model, slit_name=None):
     # This is a kludge but will work for now.
     # This model keeps open_slits as an attribute.
     open_slits = slit2msa.slits[:]
-    if slit_name is not None:
+    if slit_names is not None:
+        print(slit_names)
         new_open_slits = []
-        slit_name = str(slit_name)
+        slit_names = [str(slit_name) for slit_name in slit_names]
         for sub in open_slits:
-            if str(sub.name) == slit_name:
+            if str(sub.name) in slit_names:
                 new_open_slits.append(sub)
-                break
         if len(new_open_slits) == 0:
-            raise AttributeError("Slit {} not in open slits.".format(slit_name))
+            raise AttributeError("None of the requested slits are in the open slits.")
         open_slits = new_open_slits
 
     # NIRSpec BRIGHTOBJ (S1600A1 TSO) mode
