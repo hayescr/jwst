@@ -16,7 +16,7 @@ class Extract2dStep(Step):
     class_alias = "extract_2d"
 
     spec = """
-        slit_names = int_list(default=None)  # list of slits to extract
+        slit_names = force_list(default=None)  # list of slits to extract
         extract_orders = int_list(default=None)  # list of orders to extract
         grism_objects = list(default=None)  # list of grism objects to use
         tsgrism_extract_height =  integer(default=None)  # extraction height in pixels, TSGRISM mode

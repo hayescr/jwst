@@ -46,7 +46,6 @@ def nrs_extract2d(input_model, slit_names=None):
     # This model keeps open_slits as an attribute.
     open_slits = slit2msa.slits[:]
     if slit_names is not None:
-        print(slit_names)
         new_open_slits = []
         slit_names = [str(slit_name) for slit_name in slit_names]
         for sub in open_slits:
