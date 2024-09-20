@@ -1919,6 +1919,8 @@ class ExtractModel(ExtractBase):
                 wavelength = np.nanmean(wl[sy0:sy1, sx0:sx1], axis=0)
             else:
                 wavelength = np.nanmean(wl[sy0:sy1, sx0:sx1], axis=1)
+        else:
+            wl_array = None
 
         # Now call the wcs function to compute the celestial coordinates.
         # Also use the returned wavelengths if we weren't able to get them from the wavelength attribute.
@@ -1973,6 +1975,8 @@ class ExtractModel(ExtractBase):
             var_poisson = np.transpose(var_poisson, (1, 0))
             var_rnoise = np.transpose(var_rnoise, (1, 0))
             var_flat = np.transpose(var_flat, (1, 0))
+            if wl_array is not None:
+                wl_array = np.transpose(wl_array, (1, 0))
 
         if wavelength is None:
             log.warning("Wavelengths could not be determined.")
@@ -1993,14 +1997,19 @@ class ExtractModel(ExtractBase):
 
         disp_range = [slice0, slice1]  # Range (slice) of pixel numbers in the dispersion direction.
 
-        temp_flux, f_var_poisson, f_var_rnoise, f_var_flat, background, \
+        temp_flux, f_var_poisson, f_var_rnoise, f_var_flat, f_waves, background, \
             b_var_poisson, b_var_rnoise, b_var_flat, npixels = \
-            extract1d.extract1d(image, var_poisson, var_rnoise, var_flat,
+            extract1d.extract1d(image, var_poisson, var_rnoise, var_flat, wl_array,
                                 temp_wl, disp_range, self.p_src, self.p_bkg,
                                 self.independent_var, self.smoothing_length,
                                 self.bkg_fit, self.bkg_order, weights=None)
 
         del temp_wl
+        
+        if not np.all(np.isnan(f_waves)):
+            wavelength = f_waves
+            nan_mask = np.isnan(wavelength)
+            n_nan = nan_mask.sum(dtype=np.intp)
 
         dq = np.zeros(temp_flux.shape, dtype=np.uint32)
 

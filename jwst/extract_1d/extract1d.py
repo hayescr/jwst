@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 
-def extract1d(image, var_poisson, var_rnoise, var_flat, lambdas, disp_range,
+def extract1d(image, var_poisson, var_rnoise, var_flat, wl_array, lambdas, disp_range,
               p_src, p_bkg=None, independent_var="wavelength",
               smoothing_length=0, bkg_fit="poly", bkg_order=0, weights=None):
     """Extract the spectrum, optionally subtracting background.
@@ -44,6 +44,10 @@ def extract1d(image, var_poisson, var_rnoise, var_flat, lambdas, disp_range,
     var_flat : 2-D ndarray
         The array may have been transposed so that the dispersion direction
         is the second index.
+        
+    wl_array : 2-D ndarray
+        The array may have been transposed so that the dispersion direction
+        is the second index.  This is the 2D wavelength array to extract
 
     lambdas : 1-D array
         Wavelength at each pixel within `disp_range`.  For example,
@@ -102,6 +106,9 @@ def extract1d(image, var_poisson, var_rnoise, var_flat, lambdas, disp_range,
 
     f_var_flat : ndarray, 1-D, float64
         The extracted flat-field variance, units of (counts/s)^2
+        
+    wavelength : ndarray, 1-D, float64
+        The extracted wavelengths, units of um
 
     background : ndarray, 1-D, float64
         The background that was subtracted from the source.
@@ -239,6 +246,7 @@ def extract1d(image, var_poisson, var_rnoise, var_flat, lambdas, disp_range,
     f_var_poisson = np.zeros(nl, dtype=np.float64)
     f_var_rnoise = np.zeros(nl, dtype=np.float64)
     f_var_flat = np.zeros(nl, dtype=np.float64)
+    wavelength = np.zeros(nl, dtype=np.float64)
     background = np.zeros(nl, dtype=np.float64)
     b_var_poisson = np.zeros(nl, dtype=np.float64)
     b_var_rnoise = np.zeros(nl, dtype=np.float64)
@@ -277,10 +285,10 @@ def extract1d(image, var_poisson, var_rnoise, var_flat, lambdas, disp_range,
         # background smoothing was done, we must extract the source from
         # the original, unsmoothed image.
         # source total flux, background total flux, area, total weight
-        (temp_flux[j], f_var_poisson[j], f_var_rnoise[j], f_var_flat[j],
+        (temp_flux[j], f_var_poisson[j], f_var_rnoise[j], f_var_flat[j], wavelength[j],
          bkg_flux, b_var_poisson_val, b_var_rnoise_val, b_var_flat_val,
          npixels[j], twht) = _extract_src_flux(
-            image, var_poisson, var_rnoise, var_flat, x, j, lam, srclim,
+            image, var_poisson, var_rnoise, var_flat, wl_array, x, j, lam, srclim,
             weights=weights, bkgmodels=[bkg_model, b_var_poisson_model,
                                         b_var_rnoise_model, b_var_flat_model]
         )
@@ -293,7 +301,7 @@ def extract1d(image, var_poisson, var_rnoise, var_flat, lambdas, disp_range,
         x += 1
         continue
 
-    return (temp_flux, f_var_poisson, f_var_rnoise, f_var_flat,
+    return (temp_flux, f_var_poisson, f_var_rnoise, f_var_flat, wavelength,
             background, b_var_poisson, b_var_rnoise, b_var_flat, npixels)
 
 
@@ -333,7 +341,7 @@ def bxcar(image, smoothing_length):
     return temp_im[..., half:half + width].astype(image.dtype)
 
 
-def _extract_src_flux(image, var_poisson, var_rnoise, var_flat, x, j, lam, srclim, weights, bkgmodels):
+def _extract_src_flux(image, var_poisson, var_rnoise, var_flat, wl_array, x, j, lam, srclim, weights, bkgmodels):
     """Extract the source and subtract background.
 
     Parameters:
@@ -349,6 +357,9 @@ def _extract_src_flux(image, var_poisson, var_rnoise, var_flat, x, j, lam, srcli
 
     var_flat : 2-D ndarray
         The input flat field variance array.
+        
+    wl_array : 2-D ndarray
+        The input wavelength array.
 
     x : int
         This is an index (column number) within `image`.
@@ -386,6 +397,9 @@ def _extract_src_flux(image, var_poisson, var_rnoise, var_flat, x, j, lam, srcli
 
     f_var_flat : float or NaN
         Sum of variance within source extraction region for current column.
+        
+    wavelength : float or NaN
+        Average wavelength within source extraction region for current column.
 
     bkg_flux : float
         Sum of counts within the background extraction regions for the
@@ -428,7 +442,12 @@ def _extract_src_flux(image, var_poisson, var_rnoise, var_flat, x, j, lam, srcli
     npts = good.sum()
 
     if npts == 0:
-        return np.nan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        wavelength = np.nan
+        if wl_array is not None:
+            _, wave_val, wave_area = _extract_colpix(wl_array, x, j, srclim)
+            wavelength = (wave_val * wave_area / np.sum(wave_area)).sum(dtype=np.float64)
+
+        return np.nan, 0.0, 0.0, 0.0, wavelength, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     # filter-out bad values:
     # TODO: in the future we may need to develop a way of interpolating
@@ -487,8 +506,15 @@ def _extract_src_flux(image, var_poisson, var_rnoise, var_flat, x, j, lam, srcli
     b_var_poisson = b_var_poisson.sum(dtype=np.float64)
     b_var_rnoise = b_var_rnoise.sum(dtype=np.float64)
     b_var_flat = b_var_flat.sum(dtype=np.float64)
+    
+    # if wavelengths are provided calculate the average wavelength of the extracted pixels
+    wavelength = np.nan
+    if wl_array is not None:
+        dummy_y, wave_val, dummy_area = _extract_colpix(wl_array, x, j, srclim)
+        wave_val = wave_val[good] * area / tarea
+        wavelength = (wave_val * wht).sum(dtype=np.float64) / mwht
 
-    return (total_flux, f_var_poisson, f_var_rnoise, f_var_flat,
+    return (total_flux, f_var_poisson, f_var_rnoise, f_var_flat, wavelength,
             bkg_flux, b_var_poisson, b_var_rnoise, b_var_flat, tarea, twht)
 
 
