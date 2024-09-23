@@ -1849,9 +1849,15 @@ class ExtractModel(ExtractBase):
             if slit is None:
                 shape = input_model.data.shape
                 wcs_ref = input_model.meta.wcs
+                source_xpos = getattr(input_model, "source_xpos", 0.0)
+                source_ypos = getattr(input_model, "source_ypos", 0.0)
             else:
                 shape = slit.data.shape
                 wcs_ref = slit.meta.wcs
+                source_xpos = getattr(slit, "source_xpos", 0.0)
+                source_ypos = getattr(slit, "source_ypos", 0.0)
+                
+            log.info(f"Determining the spectral trace for source_xpos = {source_xpos:.3f} and source_xpos = {source_ypos:.3f}")
 
             nx = shape[-1]
             ny = shape[-2]
@@ -1866,8 +1872,8 @@ class ExtractModel(ExtractBase):
             # Make an initial array of wavelengths that will cover the wavelength range of the data
             wave_vals = np.linspace(np.nanmin(slit_wavelength), np.nanmax(slit_wavelength), nx)
             # Get arrays of the source position in the slit
-            pos_x = np.full(nx, input_model.source_xpos)
-            pos_y = np.full(nx, input_model.source_ypos)
+            pos_x = np.full(nx, source_xpos)
+            pos_y = np.full(nx, source_ypos)
             
             # Grab the wcs transform between the slit frame where we know the 
             # source position and the detector frame
