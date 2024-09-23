@@ -9,6 +9,7 @@ from typing import Union, Tuple, NamedTuple, List
 from astropy.modeling import polynomial
 from astropy.io import fits
 from gwcs import WCS
+from scipy.interpolate import interp1d
 from stdatamodels import DataModel
 from stdatamodels.properties import ObjectNode
 from stdatamodels.jwst import datamodels
@@ -48,6 +49,7 @@ FILE_TYPE_OTHER = "N/A"
 
 # This is to prevent calling offset_from_offset multiple times for multi-integration data.
 OFFSET_NOT_ASSIGNED_YET = "not assigned yet"
+TRACE_NOT_ASSIGNED_YET = "not assigned yet"
 
 ANY = "ANY"
 """Wildcard for slit name.
@@ -220,7 +222,9 @@ def get_extract_parameters(
         smoothing_length: Union[int, None],
         bkg_fit: str,
         bkg_order: Union[int, None],
-        use_source_posn: Union[bool, None]
+        use_source_posn: Union[bool, None],
+        use_trace: Union[bool, None],
+        shift_trace: float
 ) -> dict:
     """Get extract1d reference file values.
 
@@ -315,6 +319,13 @@ def get_extract_parameters(
             extract_params['use_source_posn'] = False
         else:
             extract_params['use_source_posn'] = use_source_posn
+            
+        if use_trace is None:
+            extract_params['use_trace'] = False
+        else:
+            extract_params['use_trace'] = use_trace
+            
+        extract_params['shift_trace'] = shift_trace
 
         extract_params['position_correction'] = 0
         extract_params['independent_var'] = 'pixel'
@@ -394,6 +405,21 @@ def get_extract_parameters(
                         else:  # use the value from the ref file
                             use_source_posn = use_source_posn_aper
                     extract_params['use_source_posn'] = use_source_posn
+                    
+                    use_trace_aper = aper.get('use_trace', None)  # value from the extract1d ref file
+                    if use_trace is None:  # no value set on command line
+                        if use_trace_aper is None:  # no value set in ref file
+                            # Use a suitable default
+                            if meta.exposure.type in ['NRS_BRIGHTOBJ',]:
+                                use_trace = True
+                                log.info(f"Turning on trace extraction exp_type = {meta.exposure.type}")
+                            else:
+                                use_trace = False
+                        else:  # use the value from the ref file
+                            use_trace = use_trace_aper
+                    extract_params['use_trace'] = use_trace
+                    
+                    extract_params['shift_trace'] = shift_trace
 
                     extract_params['extract_width'] = aper.get('extract_width')
                     extract_params['position_correction'] = 0  # default value
@@ -435,6 +461,13 @@ def get_extract_parameters(
                 extract_params['use_source_posn'] = False
             else:
                 extract_params['use_source_posn'] = use_source_posn
+                
+            if use_trace is None:
+                extract_params['use_trace'] = False
+            else:
+                extract_params['use_trace'] = use_trace
+                
+            extract_params['shift_trace'] = shift_trace
 
             extract_params['position_correction'] = 0
 
@@ -475,6 +508,7 @@ def log_initial_parameters(extract_params: dict):
     log.debug(f"smoothing_length = {extract_params['smoothing_length']}")
     log.debug(f"independent_var = {extract_params['independent_var']}")
     log.debug(f"use_source_posn = {extract_params['use_source_posn']}")
+    log.debug(f"use_trace = {extract_params['use_trace']}")
 
 
 def get_aperture(
@@ -1054,6 +1088,8 @@ class ExtractBase(abc.ABC):
             position_correction: float = 0.,
             subtract_background: Union[bool, None] = None,
             use_source_posn: Union[bool, None] = None,
+            use_trace: Union[bool, None] = None,
+            shift_trace: float = 0.,
             match: Union[str, None] = None,
             ref_file_type: Union[str, None] = None
     ):
@@ -1195,6 +1231,8 @@ class ExtractBase(abc.ABC):
         self.bkg_fit = bkg_fit
         self.bkg_order = bkg_order
         self.use_source_posn = use_source_posn
+        self.use_trace = use_trace
+        self.shift_trace = shift_trace
         self.position_correction = position_correction
         self.subtract_background = subtract_background
 
@@ -1754,18 +1792,23 @@ class ExtractModel(ExtractBase):
 -           fcn_upper2 is 7 + 8 * x
         """
         if self.src_coeff is None:
-            # Create constant functions.
-
-            if self.dispaxis == HORIZONTAL:
-                lower = float(self.ystart) - 0.5
-                upper = float(self.ystop) + 0.5
+            # Supply traces if a trace extraciton is being performed
+            if self.use_trace and self.trace is not None:
+                self.p_src = [self.trace]
+                
             else:
-                lower = float(self.xstart) - 0.5
-                upper = float(self.xstop) + 0.5
+                # Create constant functions.
 
-            log.debug(f"Converting extraction limits to [[{lower}], [{upper}]]")
+                if self.dispaxis == HORIZONTAL:
+                    lower = float(self.ystart) - 0.5
+                    upper = float(self.ystop) + 0.5
+                else:
+                    lower = float(self.xstart) - 0.5
+                    upper = float(self.xstop) + 0.5
 
-            self.p_src = [[create_poly([lower]), create_poly([upper])]]
+                log.debug(f"Converting extraction limits to [[{lower}], [{upper}]]")
+
+                self.p_src = [[create_poly([lower]), create_poly([upper])]]
         else:
             # The source extraction can include more than one region.
             n_src_coeff = len(self.src_coeff)
@@ -1795,6 +1838,56 @@ class ExtractModel(ExtractBase):
             expect_lower = not expect_lower
 
         return result
+    
+    def trace_from_wcs(self, input_model, slit):
+        
+        if self.extract_width is None:
+            trace = None
+        
+        else: 
+            
+            if slit is None:
+                shape = input_model.data.shape
+                wcs_ref = input_model.meta.wcs
+            else:
+                shape = slit.data.shape
+                wcs_ref = slit.meta.wcs
+
+            nx = shape[-1]
+            ny = shape[-2]
+            y, x = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
+            
+            d2s = wcs_ref.get_transform("detector", "slit_frame")
+            
+            # Calculate the wavelengths in the slit frame because they are in
+            # meters for cal files and um for s2d files
+            _, _, slit_wavelength = d2s(x,y)
+
+            # Make an initial array of wavelengths that will cover the wavelength range of the data
+            wave_vals = np.linspace(np.nanmin(slit_wavelength), np.nanmax(slit_wavelength), nx)
+            # Get arrays of the source position in the slit
+            pos_x = np.full(nx, input_model.source_xpos)
+            pos_y = np.full(nx, input_model.source_ypos)
+            
+            # Grab the wcs transform between the slit frame where we know the 
+            # source position and the detector frame
+            s2d = wcs_ref.get_transform("slit_frame", "detector")
+            
+            # Calculate the expected center of the source trace
+            trace_x, trace_y = s2d(pos_x, pos_y, wave_vals)
+            
+            if self.shift_trace is not None:
+                trace_y += self.shift_trace
+            
+            extr_halfwidth = self.extract_width/2.0
+            
+            # Interpolate the trace to a regular pixel grid in the dispersion
+            # direction
+            upper_trace = interp1d(trace_x, trace_y + extr_halfwidth, fill_value='extrapolate')
+            lower_trace = interp1d(trace_x, trace_y - extr_halfwidth, fill_value='extrapolate')
+            
+            trace = [lower_trace, upper_trace]
+        return trace
 
     def extract(
             self,
@@ -2552,6 +2645,8 @@ def run_extract1d(
         log_increment: int,
         subtract_background: Union[bool, None],
         use_source_posn: Union[bool, None],
+        use_trace: Union[bool, None],
+        shift_trace: float,
         center_xy: Union[float, None],
         ifu_autocen: Union[bool, None],
         ifu_rfcorr: Union[bool, None],
@@ -2677,6 +2772,8 @@ def run_extract1d(
         log_increment,
         subtract_background,
         use_source_posn,
+        use_trace,
+        shift_trace,
         center_xy,
         ifu_autocen,
         ifu_rfcorr,
@@ -2742,6 +2839,8 @@ def do_extract1d(
         log_increment: int = 50,
         subtract_background: Union[int, None] = None,
         use_source_posn: Union[bool, None] = None,
+        use_trace: Union[bool, None] = None,
+        shift_trace: float = 0,
         center_xy: Union[int, None] = None,
         ifu_autocen: Union[bool, None] = None,
         ifu_rfcorr: Union[bool, None] = None,
@@ -2918,6 +3017,7 @@ def do_extract1d(
 
             slitname = slit.name
             prev_offset = OFFSET_NOT_ASSIGNED_YET
+            prev_trace = TRACE_NOT_ASSIGNED_YET
             use_source_posn = save_use_source_posn  # restore original value
 
             if np.size(slit.data) <= 0:
@@ -2932,8 +3032,8 @@ def do_extract1d(
             try:
                 output_model = create_extraction(
                     extract_ref_dict, slit, slitname, sp_order,
-                    smoothing_length, bkg_fit, bkg_order, use_source_posn,
-                    prev_offset, exp_type, subtract_background, input_model,
+                    smoothing_length, bkg_fit, bkg_order, use_source_posn, use_trace, shift_trace,
+                    prev_offset, prev_trace, exp_type, subtract_background, input_model,
                     output_model, apcorr_ref_model, log_increment,
                     is_multiple_slits
                 )
@@ -2967,6 +3067,8 @@ def do_extract1d(
                 slitname = input_model.name
 
             prev_offset = OFFSET_NOT_ASSIGNED_YET
+            # TODO What tracing should be done for image models?
+            prev_trace = TRACE_NOT_ASSIGNED_YET
 
             for sp_order in spectral_order_list:
                 if sp_order == "not set yet":
@@ -2981,8 +3083,8 @@ def do_extract1d(
                 try:
                     output_model = create_extraction(
                         extract_ref_dict, slit, slitname, sp_order,
-                        smoothing_length, bkg_fit, bkg_order, use_source_posn,
-                        prev_offset, exp_type, subtract_background, input_model,
+                        smoothing_length, bkg_fit, bkg_order, use_source_posn, use_trace, shift_trace,
+                        prev_offset, prev_trace, exp_type, subtract_background, input_model,
                         output_model, apcorr_ref_model, log_increment,
                         is_multiple_slits
                     )
@@ -3012,6 +3114,9 @@ def do_extract1d(
 
             # Loop over all spectral orders available for extraction
             prev_offset = OFFSET_NOT_ASSIGNED_YET
+            # TODO what tracing should be done for each spectral order?
+            # should the trace be reset?
+            prev_trace = TRACE_NOT_ASSIGNED_YET
             for sp_order in spectral_order_list:
                 if sp_order == "not set yet":
                     sp_order = get_spectral_order(input_model)
@@ -3025,8 +3130,8 @@ def do_extract1d(
                 try:
                     output_model = create_extraction(
                         extract_ref_dict, slit, slitname, sp_order,
-                        smoothing_length, bkg_fit, bkg_order, use_source_posn,
-                        prev_offset, exp_type, subtract_background, input_model,
+                        smoothing_length, bkg_fit, bkg_order, use_source_posn, use_trace, shift_trace,
+                        prev_offset, prev_trace, exp_type, subtract_background, input_model,
                         output_model, apcorr_ref_model, log_increment,
                         is_multiple_slits
                     )
@@ -3357,6 +3462,7 @@ def extract_one_slit(
         slit: SlitModel,
         integ: int,
         prev_offset: Union[float, str],
+        prev_trace: Union[list, str, None],
         extract_params: dict
 ) -> Tuple[float, float, np.ndarray,
            np.ndarray, np.ndarray, np.ndarray, np.ndarray,
@@ -3500,6 +3606,17 @@ def extract_one_slit(
         extract_model = ExtractModel(input_model=input_model, slit=slit, **extract_params)
         ap = get_aperture(data.shape, extract_model.wcs, extract_params)
         extract_model.update_extraction_limits(ap)
+        
+    # TODO make sure that the input data type is reflected in this function
+    trace = None
+    if extract_model.use_trace:
+        if prev_trace == TRACE_NOT_ASSIGNED_YET:
+            trace = extract_model.trace_from_wcs(input_model, slit)
+            
+        else:
+            trace = prev_trace
+            
+    extract_model.trace = trace
 
     if extract_model.use_source_posn:
         if prev_offset == OFFSET_NOT_ASSIGNED_YET:  # Only call this method for the first integration.
@@ -3573,7 +3690,7 @@ def extract_one_slit(
 
     return (ra, dec, wavelength, temp_flux, f_var_poisson, f_var_rnoise, f_var_flat,
             background, b_var_poisson, b_var_rnoise, b_var_flat, npixels, dq, offset,
-            extraction_values)
+            trace, extraction_values)
 
 
 def replace_bad_values(
@@ -3686,7 +3803,10 @@ def create_extraction(extract_ref_dict,
                       bkg_fit,
                       bkg_order,
                       use_source_posn,
+                      use_trace,
+                      shift_trace,
                       prev_offset,
+                      prev_trace,
                       exp_type,
                       subtract_background,
                       input_model,
@@ -3761,7 +3881,9 @@ def create_extraction(extract_ref_dict,
         smoothing_length,
         bkg_fit,
         bkg_order,
-        use_source_posn
+        use_source_posn,
+        use_trace,
+        shift_trace
     )
 
     if subtract_background is not None:
@@ -3797,11 +3919,12 @@ def create_extraction(extract_ref_dict,
         try:
             ra, dec, wavelength, temp_flux, f_var_poisson, f_var_rnoise, \
                 f_var_flat, background, b_var_poisson, b_var_rnoise, \
-                b_var_flat, npixels, dq, prev_offset, extraction_values = extract_one_slit(
+                b_var_flat, npixels, dq, prev_offset, prev_trace, extraction_values = extract_one_slit(
                     input_model,
                     slit,
                     integ,
                     prev_offset,
+                    prev_trace,
                     extract_params
                 )
         except InvalidSpectralOrderNumberError as e:

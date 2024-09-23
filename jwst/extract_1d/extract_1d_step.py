@@ -159,6 +159,8 @@ class Extract1dStep(Step):
     log_increment = integer(default=50)  # increment for multi-integration log messages
     subtract_background = boolean(default=None)  # subtract background?
     use_source_posn = boolean(default=None)  # use source coords to center extractions?
+    use_trace = boolean(default=None)  # use source coords to center extractions?
+    shift_trace = float(default=0.0)  # use source coords to center extractions?
     center_xy = float_list(min=2, max=2, default=None)  # IFU extraction x/y center
     apply_apcorr = boolean(default=True)  # apply aperture corrections?
     ifu_autocen = boolean(default=False) # Auto source centering for IFU point source data.
@@ -296,6 +298,8 @@ class Extract1dStep(Step):
                         self.log_increment,
                         self.subtract_background,
                         self.use_source_posn,
+                        self.use_trace,
+                        self.shift_trace,
                         self.center_xy,
                         self.ifu_autocen,
                         self.ifu_rfcorr,
@@ -335,6 +339,8 @@ class Extract1dStep(Step):
                             self.log_increment,
                             self.subtract_background,
                             self.use_source_posn,
+                            self.use_trace,
+                            self.shift_trace,
                             self.center_xy,
                             self.ifu_autocen,
                             self.ifu_rfcorr,
@@ -377,6 +383,8 @@ class Extract1dStep(Step):
                     self.log_increment,
                     self.subtract_background,
                     self.use_source_posn,
+                    self.use_trace,
+                    self.shift_trace,
                     self.center_xy,
                     self.ifu_autocen,
                     self.ifu_rfcorr,
@@ -516,6 +524,8 @@ class Extract1dStep(Step):
                     self.log_increment,
                     self.subtract_background,
                     self.use_source_posn,
+                    self.use_trace,
+                    self.shift_trace,
                     self.center_xy,
                     self.ifu_autocen,
                     self.ifu_rfcorr,
