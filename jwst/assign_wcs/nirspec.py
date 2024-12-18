@@ -1392,8 +1392,9 @@ def compute_bounding_box(transform, wavelength_range, slit_ymin=-.55, slit_ymax=
         x, y = grid_from_bounding_box(bbox)
         _, _, lam = detector2slit(x, y)
         y_range = y[np.isfinite(lam)]
-
-        bbox = bbox_from_range(x_range, y_range)
+        
+        if len(y_range) > 0:
+            bbox = bbox_from_range(x_range, y_range)
 
     return bbox
 

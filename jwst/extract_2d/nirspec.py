@@ -84,6 +84,10 @@ def nrs_extract2d(input_model, slit_name=None):
         for slit in open_slits:
             new_model, xlo, xhi, ylo, yhi = process_slit(input_model, slit, exp_type)
 
+            if np.all(np.isnan(new_model.wavelength)):
+                log.info(f'Removing slit {slit.name} because no valid wavelengths fall on the detector')
+                continue
+
             slits.append(new_model)
             orig_s_region = new_model.meta.wcsinfo.s_region.strip()
             # set x/ystart values relative to the image (screen) frame.
