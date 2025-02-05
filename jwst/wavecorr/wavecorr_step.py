@@ -15,7 +15,7 @@ class WavecorrStep(Step):
     class_alias = "wavecorr"
 
     spec = """
-    """
+    """ # noqa: E501
 
     reference_file_types = ['wavecorr']
 
@@ -69,7 +69,7 @@ def _check_slit_metadata_attributes(slit):
     if not hasattr(slit.meta, 'wcs') and slit.meta.wcs is not None:
         raise AttributeError("Input model does not have a WCS object; assign_wcs should "
                              "be run before wavecorr.")
-    
+
     if not hasattr(slit, 'source_xpos'):
         raise AttributeError("Input model does not have source_xpos attribute; "
                              "extract_2d should be run before wavecorr.")

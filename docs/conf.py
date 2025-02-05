@@ -17,10 +17,7 @@ import sys
 import os
 from pathlib import Path
 
-if sys.version_info < (3, 11):
-     import tomli as tomllib
-else:
-     import tomllib
+import tomllib
 from packaging.version import Version
 from configparser import ConfigParser
 
@@ -462,7 +459,7 @@ epub_theme = 'epub'
 # The format is a list of tuples containing the path and title.
 # epub_pre_files = []
 
-# HTML files shat should be inserted after the pages created by sphinx.
+# HTML files that should be inserted after the pages created by sphinx.
 # The format is a list of tuples containing the path and title.
 # epub_post_files = []
 
