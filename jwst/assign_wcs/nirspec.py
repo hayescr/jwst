@@ -10,6 +10,10 @@ import warnings
 
 import gwcs
 import numpy as np
+from astropy.modeling import models
+from astropy.modeling.models import Mapping, Identity, Const1D, Scale, Tabular1D
+from astropy.modeling.rotations import Rotation2D
+from astropy import units as u
 from astropy import coordinates as coord
 from astropy import units as u
 from astropy.io import fits
@@ -1311,11 +1315,12 @@ def slicer_to_msa(reference_files):
     model : `~astropy.modeling.Model`
         Transform from ``slicer`` frame to ``msa_frame``.
     """
+    rotation = Rotation2D(angle=3.0) & Identity(2)
     with IFUFOREModel(reference_files["ifufore"]) as f:
         ifufore = f.model
     slicer2fore_mapping = Mapping((0, 1, 2, 2, 3))
     slicer2fore_mapping.inverse = Identity(4)
-    ifu_fore_transform = slicer2fore_mapping | ifufore & Identity(2)
+    ifu_fore_transform = rotation | slicer2fore_mapping | ifufore & Identity(2)
     ifu_fore_transform.inputs = ("x_slice", "y_slice", "lam", "name")
     ifu_fore_transform.outputs = ("x_msa", "y_msa", "lam", "name")
     return ifu_fore_transform
