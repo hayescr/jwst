@@ -1223,7 +1223,7 @@ def slicer_to_msa(reference_files):
     model : `~astropy.modeling.Model`
         Transform from ``slicer`` frame to ``msa_frame``.
     """
-    rotation = Rotation2D(angle=3.0) & Identity(1)
+    rotation = Rotation2D(angle=-0.6) & Identity(1)
     with IFUFOREModel(reference_files["ifufore"]) as f:
         ifufore = f.model
     slicer2fore_mapping = Mapping((0, 1, 2, 2))
