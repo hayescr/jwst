@@ -15,11 +15,9 @@ from astropy.modeling.models import Mapping, Identity, Const1D, Scale, Tabular1D
 from astropy.modeling.rotations import Rotation2D
 from astropy import units as u
 from astropy import coordinates as coord
-from astropy import units as u
 from astropy.io import fits
 from astropy.modeling import bounding_box as mbbox
-from astropy.modeling import fix_inputs, models, bind_bounding_box
-from astropy.modeling.models import Mapping, Identity, Const1D, Scale, Tabular1D
+from astropy.modeling import fix_inputs, bind_bounding_box
 from gwcs import coordinate_frames as cf
 from gwcs import selector
 from gwcs.wcstools import grid_from_bounding_box
@@ -1315,7 +1313,7 @@ def slicer_to_msa(reference_files):
     model : `~astropy.modeling.Model`
         Transform from ``slicer`` frame to ``msa_frame``.
     """
-    rotation = Rotation2D(angle=3.0) & Identity(2)
+    rotation = Rotation2D(angle=-0.6) & Identity(2)
     with IFUFOREModel(reference_files["ifufore"]) as f:
         ifufore = f.model
     slicer2fore_mapping = Mapping((0, 1, 2, 2, 3))
