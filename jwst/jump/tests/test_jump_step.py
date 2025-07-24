@@ -1,13 +1,13 @@
-from itertools import cycle
 import multiprocessing
-import numpy as np
-from numpy.testing import assert_array_equal
 import os
 import platform
-import pytest
 import time
+from itertools import cycle
 
-from stdatamodels.jwst.datamodels import GainModel, ReadnoiseModel, RampModel, dqflags
+import numpy as np
+import pytest
+from numpy.testing import assert_array_equal
+from stdatamodels.jwst.datamodels import GainModel, RampModel, ReadnoiseModel, dqflags
 
 from jwst.jump import JumpStep
 
@@ -214,7 +214,6 @@ def add_circles_to_data(data, center_coords, radii, fill_val=None):
 def test_one_CR(generate_miri_reffiles, max_cores, setup_inputs):
     """Test one cosmic ray."""
     override_gain, override_readnoise = generate_miri_reffiles()
-    print("max_cores = ", max_cores)
     grouptime = 3.0
     deltaDN = 5
     ingain = 6
@@ -243,8 +242,6 @@ def test_one_CR(generate_miri_reffiles, max_cores, setup_inputs):
         model1.data[0, CR_group:, CR_y_locs[i], CR_x_locs[i]] = (
             model1.data[0, CR_group:, CR_y_locs[i], CR_x_locs[i]] + 500
         )
-
-    print("number of CRs {}".format(len(CR_x_locs)))
 
     out_model = JumpStep.call(
         model1,
@@ -291,8 +288,6 @@ def test_nircam(generate_nircam_reffiles, setup_inputs, max_cores):
         model1.data[0, CR_group:, CR_y_locs[i], CR_x_locs[i]] = (
             model1.data[0, CR_group:, CR_y_locs[i], CR_x_locs[i]] + 500
         )
-
-    print("number of CRs {}".format(len(CR_x_locs)))
 
     out_model = JumpStep.call(
         model1,

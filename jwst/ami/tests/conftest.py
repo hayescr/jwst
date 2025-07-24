@@ -1,11 +1,11 @@
 """Fixtures for AMI tests."""
 
-import pytest
 import numpy as np
-from jwst.stpipe import Step
+import pytest
 import stdatamodels.jwst.datamodels as dm
-from jwst.ami.bp_fix import filthp_d, calc_pupil_support
 
+from jwst.ami.bp_fix import calc_pupil_support, filthp_d
+from jwst.stpipe import Step
 
 PXSC_DEG = 65.6 / (60.0 * 60.0 * 1000)
 PXSC_RAD = PXSC_DEG * np.pi / (180)
@@ -45,6 +45,7 @@ def example_model():
     model.meta.visit.start_time = "2022-06-05 12:15:41.5020000"
     model.meta.wcsinfo.roll_ref = 171.8779402866089
     model.meta.wcsinfo.v3yangle = 0.56126717
+    model.meta.wcsinfo.vparity = 1
     model.meta.filename = "test_calints.fits"
     model.meta.instrument.pupil = "NRM"
     model.meta.exposure.type = "NIS_AMI"

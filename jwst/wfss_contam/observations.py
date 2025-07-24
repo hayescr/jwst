@@ -1,20 +1,18 @@
-import time
+import logging
 import multiprocessing
+import time
+
 import numpy as np
-
+from astropy.stats import SigmaClip
+from photutils.background import Background2D, MedianBackground
 from scipy import sparse
-
 from stdatamodels.jwst import datamodels
 
-from .disperse import dispersed_pixel
-
-import logging
-
-from photutils.background import Background2D, MedianBackground
-from astropy.stats import SigmaClip
+from jwst.wfss_contam.disperse import dispersed_pixel
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+
+__all__ = ["background_subtract", "Observation"]
 
 
 def background_subtract(

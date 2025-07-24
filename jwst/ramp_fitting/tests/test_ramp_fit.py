@@ -1,9 +1,7 @@
-import pytest
 import numpy as np
-
+import pytest
 from stcal.ramp_fitting.ramp_fit import ramp_fit
-
-from stdatamodels.jwst.datamodels import dqflags, RampModel, GainModel, ReadnoiseModel
+from stdatamodels.jwst.datamodels import GainModel, RampModel, ReadnoiseModel, dqflags
 
 GOOD = dqflags.pixel["GOOD"]
 DO_NOT_USE = dqflags.pixel["DO_NOT_USE"]
@@ -917,29 +915,3 @@ def setup_inputs(
     model1.meta.exposure.drop_frames1 = 0
 
     return model1, gdq, rnoise, pixdq, err, gain
-
-
-# -----------------------------------------------------------------------------
-
-###############################################################################
-# The functions below are only used for DEBUGGING tests and developing tests. #
-###############################################################################
-
-
-def print_real_check(real, check):
-    import inspect
-
-    cf = inspect.currentframe()
-    line_number = cf.f_back.f_lineno
-    print("=" * 80)
-    print(f"----> Line = {line_number} <----")
-    base_print("real", real)
-    print("=" * 80)
-    base_print("check", check)
-    print("=" * 80)
-
-
-def base_print(label, arr):
-    arr_str = np.array2string(arr, max_line_width=np.nan, separator=", ")
-    print(label)
-    print(arr_str)

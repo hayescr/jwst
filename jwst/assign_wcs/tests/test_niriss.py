@@ -9,16 +9,13 @@ file.
 
 """
 
-from numpy.testing import assert_allclose
 from astropy.io import fits
 from gwcs import wcs
-
+from numpy.testing import assert_allclose
 from stdatamodels.jwst.datamodels.image import ImageModel
 
+from jwst.assign_wcs import niriss, util
 from jwst.assign_wcs.assign_wcs_step import AssignWcsStep
-from jwst.assign_wcs import niriss
-from jwst.assign_wcs import util
-
 
 # Allowed settings for niriss
 niriss_wfss_frames = ["grism_detector", "detector", "v2v3", "v2v3vacorr", "world"]
@@ -102,12 +99,10 @@ def get_reference_files(datamodel):
     step = AssignWcsStep()
     for reftype in AssignWcsStep.reference_file_types:
         val = step.get_reference_file(datamodel, reftype)
-        print(reftype, val)
         if val.strip() == "N/A":
             refs[reftype] = None
         else:
             refs[reftype] = val
-    print(refs)
     return refs
 
 

@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from os.path import abspath
@@ -8,26 +7,25 @@ import pytest
 from astropy.extern.configobj.configobj import ConfigObj
 from astropy.utils.data import get_pkg_data_filename
 from crds.core.exceptions import CrdsLookupError
+from stdatamodels.jwst import datamodels
 from stpipe import crds_client
-from stpipe import cmdline
 from stpipe.config import StepConfig
 from stpipe.config_parser import ValidationError
-from stdatamodels.jwst import datamodels
 
 from jwst import __version__ as jwst_version
-from jwst.white_light import WhiteLightStep
-from jwst.tests.helpers import LogWatcher
-from jwst.datamodels import ModelLibrary, ModelContainer
-
+from jwst.datamodels import ModelContainer, ModelLibrary
 from jwst.stpipe import Step
 from jwst.stpipe.tests.steps import (
+    AnotherDummyStep,
     EmptyPipeline,
     MakeListPipeline,
     MakeListStep,
+    OptionalRefTypeStep,
     ProperPipeline,
-    AnotherDummyStep,
+    SavePipeline,
 )
-from jwst.stpipe.tests.steps import OptionalRefTypeStep, SavePipeline
+from jwst.tests.helpers import LogWatcher
+from jwst.white_light import WhiteLightStep
 
 WHITELIGHTSTEP_CRDS_MIRI_PARS = {
     "max_wavelength": 12.0,
@@ -51,19 +49,14 @@ CRDS_ERROR_STRING = "PARS-WITHDEFAULTSSTEP: No parameters found"
         ("--verbose", "t", lambda stream: CRDS_ERROR_STRING not in stream),
     ],
 )
-def test_disable_crds_steppars_cmdline(capsys, arg, env_set, expected_fn):
+def test_disable_crds_steppars_cmdline(capsys, arg, env_set, expected_fn, monkeypatch):
     """Test setting of disable_crds_steppars"""
     data_path = get_pkg_data_filename("data/miri_data.fits", package="jwst.stpipe.tests")
 
     if env_set:
-        os.environ["STPIPE_DISABLE_CRDS_STEPPARS"] = env_set
+        monkeypatch.setenv("STPIPE_DISABLE_CRDS_STEPPARS", env_set)
 
-    try:
-        step, step_class, positional, debug_on_exception = cmdline.just_the_step_from_cmdline(
-            ["jwst.stpipe.tests.steps.WithDefaultsStep", data_path, arg]
-        )
-    finally:
-        os.environ.pop("STPIPE_DISABLE_CRDS_STEPPARS", None)
+    Step.from_cmdline(["jwst.stpipe.tests.steps.WithDefaultsStep", data_path, arg])
 
     captured = capsys.readouterr()
     assert expected_fn(captured.err)
@@ -93,7 +86,6 @@ def test_parameters_from_crds_filename(monkeypatch):
     monkeypatch.setattr(datamodels, "open", throw_error)
 
     fname = get_pkg_data_filename("data/miri_data.fits", package="jwst.stpipe.tests")
-    print("fname", fname)
     pars = WhiteLightStep.get_config_from_reference(fname)
     assert pars == WHITELIGHTSTEP_CRDS_MIRI_PARS
 

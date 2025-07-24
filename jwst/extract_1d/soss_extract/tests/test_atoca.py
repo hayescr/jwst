@@ -1,14 +1,16 @@
-import pytest
-import numpy as np
 from functools import partial
+
+import numpy as np
+import pytest
 from scipy.sparse import csr_matrix
+
 from jwst.extract_1d.soss_extract import atoca
 from jwst.extract_1d.soss_extract.tests.conftest import (
-    SPECTRAL_SLOPE,
-    f_lam,
     DATA_SHAPE,
+    SPECTRAL_SLOPE,
     WAVE_BNDS_O1,
     WAVE_BNDS_O2,
+    f_lam,
 )
 
 """Tests for the ATOCA extraction engine, taking advantage of the miniature
@@ -322,12 +324,6 @@ def test_get_detector_model(imagemodel, engine):
 def test_estimate_tikho_factors(engine):
     factor = engine.estimate_tikho_factors(f_lam)
     assert isinstance(factor, float)
-
-    # very approximate calculation of tik fac looks like
-    # n_pixels = (~engine.mask).sum()
-    # flux = f_lam(engine.wave_grid)
-    # dlam = engine.wave_grid[1:] - engine.wave_grid[:-1]
-    # print(n_pixels/np.mean(flux[1:] * dlam))
 
 
 @pytest.fixture(scope="module")

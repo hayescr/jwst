@@ -2,12 +2,12 @@
 Unit tests for group_scale correction
 """
 
-from stdatamodels.jwst.datamodels import RampModel
-
-from jwst.group_scale.group_scale import do_correction
-from jwst.group_scale import GroupScaleStep
 import numpy as np
 import pytest
+from stdatamodels.jwst.datamodels import RampModel
+
+from jwst.group_scale import GroupScaleStep
+from jwst.group_scale.group_scale import do_correction
 
 
 def test_nframes_or_frame_divisor_is_none(make_rampmodel):
@@ -24,7 +24,6 @@ def test_nframes_equal_frame_divisor(make_rampmodel):
     """If nframes and frame_divisor are equal, skip correction"""
     datmod = make_rampmodel(2, 4, 4, 2048, 2048)
     output = GroupScaleStep.call(datmod)
-    print(output.meta.exposure.frame_divisor, output.meta.exposure.nframes)
     assert output.meta.cal_step.group_scale == "SKIPPED"
 
 

@@ -2,13 +2,12 @@
 
 from jwst.lib import signal_slot as ss
 
-
 REFLECT_CALLED = "reflect: called."
 
 
 def reflect(*args):
     """Handler function that simply reflects the input args"""
-    print(REFLECT_CALLED)
+    print(REFLECT_CALLED)  # noqa: T201
     return args
 
 
