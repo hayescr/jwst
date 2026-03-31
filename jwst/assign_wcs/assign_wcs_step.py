@@ -57,6 +57,7 @@ class AssignWcsStep(Step):
         "ifupost",
         "ifufore",
         "ifuslicer",
+        "chromcorr",
     ]
 
     def process(self, input_data):
@@ -66,6 +67,7 @@ class AssignWcsStep(Step):
         Reference file types for this step:
 
         - camera: Camera model (NIRSPEC)
+        - chromcorr:  Fore-optics chromaticity correction (NIRSPEC)
         - collimator: Collimator Model (NIRSPEC)
         - disperser: Disperser model (NIRSPEC)
         - distortion: Spatial distortion model (FGS, MIRI, NIRCAM, NIRISS)
