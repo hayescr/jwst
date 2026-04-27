@@ -1,3 +1,5 @@
+"""Initialize the data with data quality information."""
+
 import logging
 
 from astropy.io import fits
@@ -13,7 +15,7 @@ log = logging.getLogger(__name__)
 
 class DQInitStep(Step):
     """
-    Initialize the Data Quality extension from the mask reference file.
+    Initialize the Data Quality (DQ) extension from the mask reference file.
 
     The dq_init step initializes the pixeldq attribute of the
     input datamodel using the MASK reference file.  For some
@@ -31,43 +33,24 @@ class DQInitStep(Step):
 
     def process(self, step_input):
         """
-        Perform the dq_init calibration step.
+        Perform the ``dq_init`` calibration step.
 
         Parameters
         ----------
-        step_input : str or `~stdatamodels.jwst.datamodels.RampModel`
-            Input JWST datamodel or filename.
+        step_input : str or `~stdatamodels.jwst.datamodels.RampModel` or \
+                     `~stdatamodels.jwst.datamodels.SuperstripeRampModel` or \
+                     `~stdatamodels.jwst.datamodels.GuiderRawModel`
+            Input JWST filename or datamodel.
 
         Returns
         -------
-        output_model : `~stdatamodels.jwst.datamodels.RampModel` \
-                       or `~stdatamodels.jwst.datamodels.GuiderRawModel`
+        output_model : `~stdatamodels.jwst.datamodels.RampModel` or \
+                       `~stdatamodels.jwst.datamodels.SuperstripeRampModel` or \
+                       `~stdatamodels.jwst.datamodels.GuiderRawModel`
             Result JWST datamodel.
         """
-        # Try to open the input as a regular RampModel
-        try:
-            result = self.prepare_output(step_input, open_as_type=datamodels.RampModel)
-            # Check to see if it's Guider raw data
-            if result.meta.exposure.type in dq_initialization.guider_list:
-                # Close and delete the current model if it's not the same as the input
-                if result is not step_input:
-                    del result
-
-                # Reopen as a GuiderRawModel
-                result = self.prepare_output(step_input, open_as_type=datamodels.GuiderRawModel)
-                log.info("Input opened as GuiderRawModel")
-
-        except (TypeError, ValueError):
-            # If the initial open attempt fails, try to open as a GuiderRawModel
-            try:
-                result = self.prepare_output(step_input, open_as_type=datamodels.GuiderRawModel)
-                log.info("Input opened as GuiderRawModel")
-            except (TypeError, ValueError):
-                log.error("Unexpected or unknown input model type")
-                raise
-        except Exception:
-            log.error("Can't open input")
-            raise
+        # Open the input as a ramp
+        result = self.prepare_output(step_input, open_as_ramp=True)
 
         # Retrieve the mask reference file name
         mask_filename = self.get_reference_file(result, "mask")

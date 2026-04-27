@@ -8,6 +8,7 @@ from jwst.datamodels.utils.wfss_multispec import make_wfss_multiexposure
 from jwst.extract_1d import extract
 from jwst.extract_1d.ifu import ifu_extract1d
 from jwst.extract_1d.soss_extract import soss_extract
+from jwst.lib.exposure_types import NIS_SOSS_SUPPORTED_SUBARRAYS
 from jwst.stpipe import Step
 
 __all__ = ["Extract1dStep"]
@@ -136,17 +137,19 @@ class Extract1dStep(Step):
             return model
 
         # Set the subarray mode being processed
-        if model.meta.subarray.name == "SUBSTRIP256":
-            log.info("Exposure is in the SUBSTRIP256 subarray.")
-            log.info("Traces 1 and 2 will be modelled and decontaminated before extraction.")
-            subarray = "SUBSTRIP256"
-        elif model.meta.subarray.name == "SUBSTRIP96":
+        if model.meta.subarray.name == "SUBSTRIP96":
             log.info("Exposure is in the SUBSTRIP96 subarray.")
             log.info(
                 "Traces of orders 1 and 2 will be modelled but only order 1 "
                 "will be decontaminated before extraction."
             )
             subarray = "SUBSTRIP96"
+        elif model.meta.subarray.name in NIS_SOSS_SUPPORTED_SUBARRAYS:
+            # Remaining arrays other than SUBSTRIP96 are either SUBSTRIP256
+            # or a superstripe subarray that reassembles to SUBSTRIP256
+            log.info("Exposure is in the SUBSTRIP256 subarray.")
+            log.info("Traces 1 and 2 will be modelled and decontaminated before extraction.")
+            subarray = "SUBSTRIP256"
         else:
             log.error(
                 "The SOSS extraction is implemented for the SUBSTRIP256 "
@@ -358,17 +361,11 @@ class Extract1dStep(Step):
                 datamodels.IFUCubeModel,
                 ModelContainer,
                 SourceModelContainer,
+                datamodels.MultiSlitModel,
             ),
         ):
             # Acceptable input type, just log it
             log.debug(f"Input is a {str(output_model)}.")
-        elif isinstance(output_model, datamodels.MultiSlitModel):
-            # If input is multislit, with 3D calints, skip the step
-            log.debug("Input is a MultiSlitModel")
-            if len((output_model[0]).shape) == 3:
-                log.warning("3D input is unsupported; step will be skipped")
-                output_model.meta.cal_step.extract_1d = "SKIPPED"
-                return output_model
         else:
             log.error(f"Input is a {str(output_model)}, ")
             log.error("which was not expected for extract_1d.")

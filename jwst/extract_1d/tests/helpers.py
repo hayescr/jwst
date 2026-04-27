@@ -17,6 +17,7 @@ __all__ = [
     "mock_miri_lrs_fs_func",
     "mock_miri_ifu_func",
     "mock_miri_wfss_l2",
+    "mock_nircam_dhs",
     "mock_nis_wfss_l2",
     "mock_nis_wfss_l3",
     "mock_niriss_soss_func",
@@ -37,25 +38,33 @@ def simple_wcs_func():
         The WCS object.
     """
     shape = (50, 50)
-    xcenter = shape[1] // 2.0
+    ycenter = shape[0] // 2.0
 
-    cdelt1 = 0.1
-    cdelt2 = 1e-7
+    # Set up for a simple spatial scale of 0.1 arcsec/pix
+    cdelt1 = 1e-7 / 3600  # negligible in RA to avoid cos(Dec) effects
+    cdelt2 = 0.1 / 3600  # 0.1 arcsec / pixel in Dec
     cdelt3 = 0.01
 
     crval1 = 45.0
     crval2 = 45.1
     crval3 = 7.5
 
-    ra = Shift(1 - xcenter) | Scale(cdelt1) | Shift(crval1)
-    dec = Scale(cdelt2) | Shift(crval2)
+    ra = Shift(1 - ycenter) | Scale(cdelt1) | Shift(crval1)
+    dec = Shift(1 - ycenter) | Scale(cdelt2) | Shift(crval2)
     wave = Scale(cdelt3) | Shift(crval3)
     det2slit = Mapping((1, 1, 0), n_inputs=2) | Identity(2) & wave
     slit2world = ra & dec & Identity(1)
 
     input_frame = gwcs.Frame2D(name="detector")
-    slit_frame = gwcs.Frame2D(name="slit_frame")
-    output_frame = gwcs.Frame2D(name="world")
+    slit_frame = gwcs.CoordinateFrame(
+        name="slit_frame",
+        naxes=3,
+        axes_order=(0, 1, 2),
+        axes_type=["SPATIAL", "SPATIAL", "SPECTRAL"],
+    )
+    output_frame = gwcs.CoordinateFrame(
+        name="world", naxes=3, axes_order=(0, 1, 2), axes_type=["SPATIAL", "SPATIAL", "SPECTRAL"]
+    )
     pipeline = [(input_frame, det2slit), (slit_frame, slit2world), (output_frame, None)]
     wcs = gwcs.WCS(pipeline)
 
@@ -77,8 +86,9 @@ def simple_wcs_transpose_func():
     shape = (50, 50)
     xcenter = shape[1] // 2.0
 
-    cdelt1 = 0.1
-    cdelt2 = 1e-7
+    # Set up for a simple spatial scale of 0.1 arcsec/pix
+    cdelt1 = 1e-7 / 3600  # negligible in RA to avoid cos(Dec) effects
+    cdelt2 = 0.1 / 3600  # 0.1 arcsec / pixel in Dec
     cdelt3 = -0.01
 
     crval1 = 45.0
@@ -86,13 +96,15 @@ def simple_wcs_transpose_func():
     crval3 = 7.5
 
     ra = Shift(1 - xcenter) | Scale(cdelt1) | Shift(crval1)
-    dec = Scale(cdelt2) | Shift(crval2)
+    dec = Shift(1 - xcenter) | Scale(cdelt2) | Shift(crval2)
     wave = Scale(cdelt3) | Shift(crval3)
     mapping = Mapping((0, 0, 1), n_inputs=2)
     transform = mapping | ra & dec & wave
 
     input_frame = gwcs.Frame2D(name="detector")
-    output_frame = gwcs.Frame2D(name="world")
+    output_frame = gwcs.CoordinateFrame(
+        name="world", naxes=3, axes_order=(0, 1, 2), axes_type=["SPATIAL", "SPATIAL", "SPECTRAL"]
+    )
     wcs = gwcs.WCS(transform, input_frame=input_frame, output_frame=output_frame)
 
     # Add a bounding box
@@ -446,6 +458,85 @@ def mock_miri_ifu_func():
     model.var_rnoise = model.data * 0.02
     model.var_flat = model.data * 0.05
     model.weightmap = np.full_like(model.data, 1.0)
+    return model
+
+
+def mock_nircam_dhs():
+    """
+    Mock a substripe MultiSlitModel in NIRCam DHS TSGRISM mode.
+
+    Returns
+    -------
+    MultiSlitModel
+        The mock model.
+    """
+    model = dm.MultiSlitModel()
+    model.meta.instrument.name = "NIRCAM"
+    model.meta.instrument.detector = "NRCA1"
+    model.meta.observation.date = "2026-02-18"
+    model.meta.observation.time = "06:24:45.569"
+    model.meta.exposure.type = "NRC_TSGRISM"
+    intend = 3
+    model.meta.exposure.integration_start = 1
+    model.meta.exposure.integration_end = intend
+    model.meta.exposure.nints = intend
+    integrations = [
+        (
+            1,
+            59729.04367729,
+            59729.04378181,
+            59729.04388632,
+            59729.04731706,
+            59729.04742158,
+            59729.04752609,
+        ),
+        (
+            2,
+            59729.04389677,
+            59729.04400128,
+            59729.04410579,
+            59729.04753654,
+            59729.04764105,
+            59729.04774557,
+        ),
+        (
+            3,
+            59729.04411625,
+            59729.04422076,
+            59729.04432527,
+            59729.04775602,
+            59729.04786053,
+            59729.04796504,
+        ),
+    ]
+
+    integration_table = np.array(
+        integrations,
+        dtype=[
+            ("integration_number", "i4"),
+            ("int_start_MJD_UTC", "f8"),
+            ("int_mid_MJD_UTC", "f8"),
+            ("int_end_MJD_UTC", "f8"),
+            ("int_start_BJD_TDB", "f8"),
+            ("int_mid_BJD_TDB", "f8"),
+            ("int_end_BJD_TDB", "f8"),
+        ],
+    )
+    model.int_times = integration_table
+
+    for _ in range(2):
+        submodel = dm.SlitModel()
+        submodel.meta.wcsinfo.dispersion_direction = 1
+        submodel.meta.photometry.pixelarea_steradians = 1.0
+        submodel.meta.wcs = simple_wcs_func()
+
+        submodel.data = np.arange(intend * 50 * 50, dtype=float).reshape((intend, 50, 50))
+        submodel.var_poisson = submodel.data * 0.02
+        submodel.var_rnoise = submodel.data * 0.02
+        submodel.var_flat = submodel.data * 0.05
+        submodel.update(model)
+        submodel.int_times = integration_table
+        model.slits.append(submodel)
     return model
 
 

@@ -8,6 +8,8 @@ from astropy.modeling.polynomial import Polynomial2D
 from scipy.interpolate import interp1d
 from stpipe import crds_client
 
+from jwst.lib.exposure_types import NIS_SOSS_SUPPORTED_SUBARRAYS
+
 log = logging.getLogger(__name__)
 
 DEFAULT_CRDS_PARAMS = {
@@ -583,10 +585,10 @@ def get_soss_wavemaps(
         wavemap[:subarray_ymin, :] = wavemap[subarray_ymin]
 
         # Trim to subarray
-        if subarray == "SUBSTRIP256":
-            wavemap = wavemap[subarray_ymin:soss_xdim, :]
         if subarray == "SUBSTRIP96":
             wavemap = wavemap[subarray_ymin : subarray_ymin + 96, :]
+        elif subarray in NIS_SOSS_SUPPORTED_SUBARRAYS:
+            wavemap = wavemap[subarray_ymin:soss_xdim, :]
 
         wavemaps.append(wavemap)
         traces.append(spectrace)
@@ -613,4 +615,8 @@ def _check_pwcpos_bounds(pwcpos, bounds):
     bool
         True if the PWC position is within bounds, False otherwise.
     """
-    return bounds[0] <= pwcpos <= bounds[1]
+    if bounds is not None and len(bounds) == 2:
+        return bounds[0] <= pwcpos <= bounds[1]
+
+    # No bounds found: return False
+    return False

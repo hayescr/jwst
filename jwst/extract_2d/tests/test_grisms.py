@@ -335,7 +335,8 @@ def test_create_specific_orders():
         assert [1] == list(ids[0].order_bounding.keys())
 
 
-def test_extract_tso_subarray():
+@pytest.mark.parametrize("subarray", [True, False])
+def test_extract_tso_subarray(subarray):
     """Test extraction of a TSO object.
 
     NRC_TSGRISM mode doesn't use the catalog since
@@ -344,7 +345,7 @@ def test_extract_tso_subarray():
     extraction with a small CubeModel
     """
 
-    wcsimage = create_tso_wcsimage(subarray=True)
+    wcsimage = create_tso_wcsimage(subarray=subarray)
     refs = get_reference_files(wcsimage)
     outmodel = extract_tso_object(wcsimage, reference_files=refs)
     assert isinstance(outmodel, SlitModel)
@@ -354,7 +355,10 @@ def test_extract_tso_subarray():
     assert outmodel.xstart > 0
     assert outmodel.ystart > 0
     assert outmodel.meta.wcsinfo.spectral_order == 1
-
+    wcs_test_xpix = 6
+    np.testing.assert_allclose(
+        wcs_test_xpix, outmodel.meta.wcs.invert(*outmodel.meta.wcs(wcs_test_xpix, 10))[0], atol=2e-2
+    )
     # These are the sizes of the valid wavelength regions
     # not the size of the cutout
     assert outmodel.ysize > 0
@@ -564,7 +568,7 @@ def test_wfss_extract_custom_height():
     object 26 should have order 2 excluded at order 1 partial
     """
     imwcs, refs = setup_image_cat()
-    imwcs.meta.wcsinfo._instance["dispersion_direction"] = 1
+    imwcs.meta.wcsinfo.instance["dispersion_direction"] = 1
     extract_orders = [1]  # just extract the first order
     test_boxes = create_grism_bbox(
         imwcs, refs, mmag_extract=99.0, extract_orders=extract_orders, wfss_extract_half_height=5
