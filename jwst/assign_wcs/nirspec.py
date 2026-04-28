@@ -330,8 +330,8 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
         slicer_frame,
         msa_frame,
         oteip,
+        oteip_chromcorr,
         v2v3,
-        v2v3chromcorr,
         v2v3vacorr,
         world,
     ) = create_frames()
@@ -359,19 +359,19 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
     msa2oteip.inputs = ("x_msa", "y_msa", "lam", "name")
     msa2oteip.outputs = ("x_ote", "y_ote", "lam", "name")
 
+    # Transform to correct OTEIP for wavelength dependent spatial shifts
+    # due to chromaticity of NIRSpec fore-optics
+    chrom_corr = oteip_to_chromcorr(reference_files) & Identity(1)
+    chrom_corr.name = "chrom_corr"
+    chrom_corr.inputs = ("x_ote", "y_ote", "lam", "name")
+    chrom_corr.outputs = ("x_ote", "y_ote", "lam", "name")
+
     # OTEIP to V2,V3 transform
     # This includes a wavelength unit conversion from meters to microns.
     oteip2v23 = oteip_to_v23(reference_files) & Identity(1)
     oteip2v23.name = "oteip2v23"
     oteip2v23.inputs = ("x_ote", "y_ote", "lam", "name")
     oteip2v23.outputs = ("v2", "v3", "lam", "name")
-
-    # Transform to correct V2, V3 for wavelength dependent spatial shifts
-    # due to chromaticity of NIRSpec fore-optics
-    chrom_corr = v23_to_chromcorr(reference_files) & Identity(1)
-    chrom_corr.name = "chrom_corr"
-    chrom_corr.inputs = ("v2", "v3", "lam", "name")
-    chrom_corr.outputs = ("v2", "v3", "lam", "name")
 
     # Compute differential velocity aberration (DVA) correction:
     va_corr = pointing.dva_corr_model(
@@ -403,9 +403,9 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
         (slit_frame, slit2slicer),
         (slicer_frame, slicer2msa),
         (msa_frame, msa2oteip),
-        (oteip, oteip2v23),
+        (oteip, chrom_corr),
+        (oteip_chromcorr, oteip2v23),
         (v2v3, va_corr),
-        (v2v3chromcorr, chrom_corr),
         (v2v3vacorr, tel2sky),
         (world, None),
     ]
@@ -510,7 +510,7 @@ def slitlets_wcs(input_model, reference_files, open_slits_id):
     # Create coordinate frames in the NIRSPEC WCS pipeline"
     # "detector", "gwa", "slit_frame", "msa_frame", "oteip", "v2v3", "v2v3vacorr", "world"
     # _ would be the slicer_frame that is not used
-    (det, sca, gwa, slit_frame, _, msa_frame, oteip, v2v3, v2v3chromcorr, v2v3vacorr, world) = (
+    (det, sca, gwa, slit_frame, _, msa_frame, oteip, oteip_chromcorr, v2v3, v2v3vacorr, world) = (
         create_frames()
     )
 
@@ -2137,6 +2137,32 @@ def msa_to_oteip(reference_files):
     return msa2fore_mapping | (fore & Identity(1))
 
 
+def oteip_to_chromcorr(reference_files):
+    """
+    Transform to correct ``oteip`` frame for chromaticity effects.
+
+    Parameters
+    ----------
+    reference_files : dict
+        Mapping between reftype (keys) and reference file name (vals).
+        Requires the 'ote' reference file.
+
+    Returns
+    -------
+    model : `~astropy.modeling.Model`
+        Transform to correct ``oteip`` frame for fore-optics chromaticity effects.
+    """
+    # TODO Update with ChromCorrModel() once this is in stdatamodels
+    with JwstDataModel(reference_files["chromcorr"]) as f:
+        chrom_corr = f.model
+
+    # chromcorr reference file model transform takes x_ote, y_ote, wavelength,
+    # outputs x_ote_corrected, y_ote_corrected, wavelength, and already includes
+    # an inverse.
+
+    return chrom_corr
+
+
 def oteip_to_v23(reference_files):
     """
     Transform from ``oteip`` frame to ``v2v3`` frame.
@@ -2166,32 +2192,6 @@ def oteip_to_v23(reference_files):
     return oteip2v23
 
 
-def v23_to_chromcorr(reference_files):
-    """
-    Transform to correct ``v2v3`` frame for chromaticity effects.
-
-    Parameters
-    ----------
-    reference_files : dict
-        Mapping between reftype (keys) and reference file name (vals).
-        Requires the 'ote' reference file.
-
-    Returns
-    -------
-    model : `~astropy.modeling.Model`
-        Transform to correct ``v2v3`` frame for fore-optics chromaticity effects.
-    """
-    # TODO Update with ChromCorrModel() once this is in stdatamodels
-    with JwstDataModel(reference_files["chromcorr"]) as f:
-        chrom_corr = f.model
-
-    # chromcorr reference file model transform takes v2, v3, wavelength,
-    # outputs v2_corrected, v3_corrected, wavelength, and already includes
-    # an inverse.
-
-    return chrom_corr
-
-
 def create_frames():
     """
     Create the coordinate frames in the NIRSPEC WCS pipeline.
@@ -2219,12 +2219,6 @@ def create_frames():
     v2v3_spatial = cf.Frame2D(
         name="v2v3_spatial", axes_order=(0, 1), unit=(u.arcsec, u.arcsec), axes_names=("v2", "v3")
     )
-    v2v3chromcorr_spatial = cf.Frame2D(
-        name="v2v3vacorr_spatial",
-        axes_order=(0, 1),
-        unit=(u.arcsec, u.arcsec),
-        axes_names=("v2", "v3"),
-    )
     v2v3vacorr_spatial = cf.Frame2D(
         name="v2v3vacorr_spatial",
         axes_order=(0, 1),
@@ -2238,7 +2232,6 @@ def create_frames():
         name="spectral", axes_order=(2,), unit=(u.micron,), axes_names=("wavelength",)
     )
     v2v3 = cf.CompositeFrame([v2v3_spatial, spec], name="v2v3")
-    v2v3chromcorr = cf.CompositeFrame([v2v3chromcorr_spatial, spec], name="v2v3chromcorr")
     v2v3vacorr = cf.CompositeFrame([v2v3vacorr_spatial, spec], name="v2v3vacorr")
     slit_frame = cf.CompositeFrame([slit_spatial, spec], name="slit_frame")
     slicer_frame = cf.CompositeFrame([slicer_spatial, spec], name="slicer")
@@ -2247,6 +2240,7 @@ def create_frames():
         name="oteip", axes_order=(0, 1), unit=(u.deg, u.deg), axes_names=("X_OTEIP", "Y_OTEIP")
     )
     oteip = cf.CompositeFrame([oteip_spatial, spec], name="oteip")
+    oteip_chromcorr = cf.CompositeFrame([oteip_spatial, spec], name="oteip_chromcorr")
     world = cf.CompositeFrame([sky, spec], name="world")
     return (
         det,
@@ -2256,8 +2250,8 @@ def create_frames():
         slicer_frame,
         msa_frame,
         oteip,
+        oteip_chromcorr,
         v2v3,
-        v2v3chromcorr,
         v2v3vacorr,
         world,
     )
