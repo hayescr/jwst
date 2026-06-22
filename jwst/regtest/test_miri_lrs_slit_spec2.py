@@ -26,12 +26,14 @@ def run_pipeline(rtdata_module, resource_tracker):
         "calwebb_spec2",
         rtdata.input,
         "--steps.assign_wcs.save_results=true",
-        "--save_bsub=true",
         "--steps.srctype.save_results=true",
+        "--steps.targ_centroid.skip=false",
+        "--steps.targ_centroid.save_results=true",
         "--steps.flat_field.save_results=true",
         "--steps.pathloss.save_results=true",
         "--steps.pixel_replace.skip=false",
         "--steps.pixel_replace.save_results=true",
+        "--steps.bkg_subtract.save_results=true",
         "--steps.bkg_subtract.save_combined_background=true",
     ]
     with resource_tracker.track():
@@ -49,6 +51,7 @@ def test_log_tracked_resources_spec2(log_tracked_resources, run_pipeline):
         "combinedbackground",
         "bsub",
         "srctype",
+        "targ_centroid",
         "flat_field",
         "pathloss",
         "cal",

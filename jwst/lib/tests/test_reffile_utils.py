@@ -3,9 +3,10 @@ import pytest
 from stdatamodels.jwst.datamodels import ImageModel, RampModel, ReadnoiseModel, WfssBkgModel
 
 from jwst.lib.reffile_utils import (
+    detector_science_frame_transform,
     find_row,
-    generate_stripe_array,
     get_subarray_model,
+    ref_matches_sci,
     science_detector_frame_transform,
 )
 
@@ -33,60 +34,7 @@ def test_find_row():
     assert result is None
 
 
-def test_generate_stripe():
-    # Generate test array with pixel values
-    # equal to row number in detector frame.
-    test_array = (np.ones((2048, 2048), dtype=int) * np.arange(2048)).T
-
-    # Use two NIRCam subarray cases to test.
-    # Stripe params: xsize_sci, ysize_sci, nreads1, nreads2, nskips1,
-    #                nskips2, repeat_stripe, interleave_reads1, fastaxis, slowaxis
-
-    # SUB41STRIPE1_DHS nrca1 case
-    stripe_params = (2048, 41, 1, 40, 1901, 0, 1, 1, -1, 2)
-
-    # Function presumes input in science frame, so move test array to science frame
-    # before supplying to function.
-    stripe1_array = generate_stripe_array(
-        science_detector_frame_transform(test_array, *stripe_params[-2:]), *stripe_params
-    )
-    assert stripe1_array.shape == (41, 2048)
-    assert stripe1_array[0, 1024] == 0
-    assert stripe1_array[1, 1024] == 1902  # nreads1 + nskips1
-
-    # Test swapped axes
-    stripe_params = (2048, 41, 1, 40, 1901, 0, 1, 1, 2, 1)
-    stripe1swap_array = generate_stripe_array(
-        science_detector_frame_transform(test_array, *stripe_params[-2:]), *stripe_params
-    )
-    assert stripe1swap_array.shape == (2048, 41)
-    assert stripe1swap_array[1024, 1] == 1902  # nreads1 + nskips1
-
-    # SUB82STRIPE2_DHS nrca2 case
-    stripe_params = (2048, 82, 1, 40, 1662, 82, 1, 1, 1, -2)
-    stripe2_array = generate_stripe_array(
-        science_detector_frame_transform(test_array, *stripe_params[-2:]), *stripe_params
-    )
-    assert stripe2_array.shape == (82, 2048)
-    # nrca2 has flipped row direction, so in science frame the row indices are flipped.
-    assert stripe2_array[-1, 1024] == 0
-    assert stripe2_array[-2, 1024] == 1663  # nreads1 + nskips1
-    assert stripe2_array[-42, 1024] == 0
-    assert stripe2_array[-43, 1024] == 1785  # nreads1 + nskips1 + nreads2 + nskips2
-
-    # SUB164STRIPE4_DHS nrcalong case
-    stripe_params = (2048, 164, 1, 40, 971, 0, 1, 0, -1, 2)
-    stripe4_array = generate_stripe_array(
-        science_detector_frame_transform(test_array, *stripe_params[-2:]), *stripe_params
-    )
-    assert stripe4_array.shape == (164, 2048)
-    assert stripe4_array[0, 1024] == 0
-    assert stripe4_array[1, 1024] == 972  # nreads1 + nskips1
-    assert stripe4_array[42, 1024] == 972  # nreads1 + nskips1, stripe 2
-    assert stripe4_array[83, 1024] == 972  # nreads1 + nskips1, stripe 3
-
-
-def test_multistripe_subarray_model():
+def test_multistripe_subarray_model_substripe():
     mock_rn = ReadnoiseModel(data=(np.ones((2048, 2048), dtype=int) * np.arange(2048)).T)
     mock_rn.meta.instrument.name = "NIRCAM"
     generate_test_refmodel_metadata(mock_rn)
@@ -98,7 +46,7 @@ def test_multistripe_subarray_model():
         "xsize": 2048,
         "xstart": 1,
         "ysize": 164,
-        "ystart": 1885,
+        "ystart": 1,
         "multistripe_reads1": 1,
         "multistripe_skips1": 1549,
         "multistripe_reads2": 40,
@@ -112,9 +60,45 @@ def test_multistripe_subarray_model():
     assert mock_rn_cutout.data.shape == mock_sci.shape[-2:]
 
 
+def test_multistripe_subarray_model_superstripe_only():
+    mock_rn = ReadnoiseModel(data=(np.ones((2048, 2048), dtype=int) * np.arange(2048)[:, None]))
+    mock_rn.meta.instrument.name = "NIRCAM"
+    mock_rn.meta.subarray.xstart = 1
+    generate_test_refmodel_metadata(mock_rn)
+    mock_sci = RampModel(data=np.ones((24, 5, 8, 64)))
+    mock_sci.meta.subarray = {
+        "fastaxis": 1,
+        "name": "SUB64P_SUPSTP008",
+        "slowaxis": -2,
+        "xsize": 64,
+        "xstart": 1851,
+        "ysize": 8,
+        "ystart": 1880,
+        "multistripe_reads1": 0,
+        "multistripe_skips1": 0,
+        "multistripe_reads2": 0,
+        "multistripe_skips2": 0,
+        "repeat_stripe": 0,
+        "interleave_reads1": 0,
+        "superstripe_step": 8,
+        "num_superstripe": 8,
+    }
+    mock_rn_cutout = get_subarray_model(mock_sci, mock_rn)
+    assert mock_rn_cutout.data.shape == (8, 8, 64)
+    assert np.all(mock_rn_cutout.data[0] == np.arange(1872, 1880)[:, None])
+    assert np.all(mock_rn_cutout.data[-1] == np.arange(1816, 1824)[:, None])
+
+
 @pytest.fixture
 def mock_sci():
-    """Fixture to create a mock science model in a subarray."""
+    """
+    Create a mock science model in a subarray.
+
+    Returns
+    -------
+    sci : ImageModel
+        The mock science datamodel
+    """
     sci = ImageModel(data=np.ones((64, 2048)), dq=np.zeros((64, 2048), dtype=int))
     sci.meta.subarray.xstart = 1
     sci.meta.subarray.ystart = 1985
@@ -127,7 +111,14 @@ def mock_sci():
 
 @pytest.fixture
 def mock_bkg():
-    """Fixture to create a mock background model that is full detector size."""
+    """
+    Create a mock background model that is full detector size.
+
+    Returns
+    -------
+    bkg : WfssBkgModel
+        The mock background datamodel
+    """
     bkg = WfssBkgModel(data=np.ones((2048, 2048)))
     bkg.meta.subarray.xstart = 1
     bkg.meta.subarray.ystart = 1
@@ -153,3 +144,100 @@ def test_get_subarray_model_typeerror(mock_sci, mock_bkg):
 
     with pytest.raises(TypeError):
         get_subarray_model("not_a_model", mock_bkg)
+
+
+@pytest.mark.parametrize(
+    "fastaxis, slowaxis, result",
+    [
+        (1, 2, np.array([[1, 2], [3, 4]])),
+        (1, -2, np.array([[3, 4], [1, 2]])),
+        (-1, 2, np.array([[2, 1], [4, 3]])),
+        (-1, -2, np.array([[4, 3], [2, 1]])),
+        (2, 1, np.array([[1, 3], [2, 4]])),
+        (2, -1, np.array([[2, 4], [1, 3]])),
+        (-2, 1, np.array([[3, 1], [4, 2]])),
+        (-2, -1, np.array([[4, 2], [3, 1]])),
+    ],
+)
+def test_science_detector_frame_transform(fastaxis, slowaxis, result):
+    detector_array = np.array([[1, 2], [3, 4]])
+    returned = science_detector_frame_transform(detector_array.copy(), fastaxis, slowaxis)
+    assert np.allclose(returned, result)
+
+
+@pytest.mark.parametrize(
+    "fastaxis, slowaxis, input",
+    [
+        (1, 2, np.array([[1, 2], [3, 4]])),
+        (1, -2, np.array([[3, 4], [1, 2]])),
+        (-1, 2, np.array([[2, 1], [4, 3]])),
+        (-1, -2, np.array([[4, 3], [2, 1]])),
+        (2, 1, np.array([[1, 3], [2, 4]])),
+        (2, -1, np.array([[2, 4], [1, 3]])),
+        (-2, 1, np.array([[3, 1], [4, 2]])),
+        (-2, -1, np.array([[4, 2], [3, 1]])),
+    ],
+)
+def test_detector_science_frame_transform(fastaxis, slowaxis, input):
+    detector_array = np.array([[1, 2], [3, 4]])
+    returned = detector_science_frame_transform(input.copy(), fastaxis, slowaxis)
+    assert np.allclose(returned, detector_array)
+
+
+@pytest.mark.parametrize(
+    "fastaxis, slowaxis",
+    [
+        (1, 2),
+        (1, -2),
+        (-1, 2),
+        (-1, -2),
+        (2, 1),
+        (2, -1),
+        (-2, 1),
+        (-2, -1),
+    ],
+)
+def test_roundtrip(fastaxis, slowaxis):
+    test_array = np.arange(100 * 100, dtype=np.float32).reshape((100, 100))
+    forward = science_detector_frame_transform(test_array.copy(), fastaxis, slowaxis)
+    reverse = detector_science_frame_transform(forward.copy(), fastaxis, slowaxis)
+    assert np.allclose(reverse, test_array)
+
+
+def test_ref_matches_sci_nircam_subarray():
+    # Mock subarray ramp
+    sub_meta = {
+        "name": "SUBGRISM256",
+        "fastaxis": -1,
+        "slowaxis": 2,
+        "xsize": 2048,
+        "xstart": 1,
+        "ysize": 256,
+        "ystart": 1,
+    }
+    mock_sci = RampModel(data=np.ones((5, 5, 256, 2048)))
+    mock_sci.meta.subarray = sub_meta
+
+    # Mock full size readnoise
+    mock_rn = ReadnoiseModel(data=np.ones((2048, 2048), dtype=int))
+    mock_rn.meta.instrument.name = "NIRCAM"
+    generate_test_refmodel_metadata(mock_rn)
+
+    # Does not match science
+    assert not ref_matches_sci(mock_sci, mock_rn)
+
+    # Mock subarray RN
+    mock_sub_rn = ReadnoiseModel(data=np.ones((256, 2048), dtype=int))
+    mock_sub_rn.meta.instrument.name = "NIRCAM"
+    generate_test_refmodel_metadata(mock_sub_rn)
+    mock_sub_rn.meta.subarray = sub_meta
+
+    # Does match science
+    assert ref_matches_sci(mock_sci, mock_sub_rn)
+
+    # Mock superstripe model without any other changes
+    # This is unrealistic, but sufficient to check the handling in this function.
+    mock_sci.meta.subarray.num_superstripe = 3
+
+    # Does not match science: superstripes always need special handling
+    assert not ref_matches_sci(mock_sci, mock_rn)

@@ -6,6 +6,7 @@ from stdatamodels.jwst import datamodels
 from jwst.assign_wcs import AssignWcsStep
 from jwst.associations import asn_from_list
 from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
+from jwst.datamodels import ModelContainer
 from jwst.wfs_combine import WfsCombineStep
 
 
@@ -14,6 +15,8 @@ def wfs_association(tmp_path_factory):
     imsize = 10
     tmp_path = tmp_path_factory.mktemp("wfs")
     im1 = datamodels.ImageModel((imsize, imsize))
+    im1.dq = im1.get_default("dq")
+    im1.err = im1.get_default("err")
     im1.meta.wcsinfo = {
         "dec_ref": 11.99875540218638,
         "ra_ref": 22.02351763251896,
@@ -46,7 +49,7 @@ def wfs_association(tmp_path_factory):
 
     asn = asn_from_list.asn_from_list([path1, path2], product_name="combined", rule=DMS_Level3_Base)
     asn.data["program"] = "00024"
-    asn.data["asn_type"] = "wfs-image2"
+    asn.data["asn_type"] = "image2"
     asn.sequence = 1
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -180,3 +183,28 @@ def test_step_pos_order_no_refine_with_flip(wfs_association):
             path_asn, do_refine=False, flip_dithers=True, psf_size=50, blur_size=10, n_size=2
         )
     assert wfs[0].meta.wcsinfo.ra_ref == 22.02351763251896
+
+
+def test_step_complete(wfs_association):
+    path_asn, path1, path2 = wfs_association
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            message="Input association file contains path information",
+        )
+        container = WfsCombineStep.call(path_asn)
+
+    assert isinstance(container, ModelContainer)
+    assert len(container) == 1
+    result = container[0]
+
+    # Step is complete
+    assert result.meta.cal_step.wfs_combine == "COMPLETE"
+
+    # Step requires ASN file as input, so input cannot be modified,
+    # but verify that output is not input anyway.
+    assert container is not path_asn
+    assert result is not path_asn
+
+    container.close()

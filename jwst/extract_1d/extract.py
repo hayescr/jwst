@@ -42,7 +42,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-WFSS_EXPTYPES = ["NIS_WFSS", "NRC_WFSS", "NRC_GRISM"]
+WFSS_EXPTYPES = ["NIS_WFSS", "NRC_WFSS", "NRC_GRISM", "MIR_WFSS"]
 """Exposure types to be regarded as wide-field slitless spectroscopy."""
 
 SRCPOS_EXPTYPES = ["MIR_LRS-FIXEDSLIT", "NRS_FIXEDSLIT", "NRS_MSASPEC", "NRS_BRIGHTOBJ"]
@@ -146,6 +146,7 @@ def read_apcorr_ref(refname, exptype):
     apcorr_model_map = {
         "MIR_LRS-FIXEDSLIT": MirLrsApcorrModel,
         "MIR_LRS-SLITLESS": MirLrsApcorrModel,
+        "MIR_WFSS": MirLrsApcorrModel,
         "MIR_MRS": MirMrsApcorrModel,
         "NRC_GRISM": NrcWfssApcorrModel,
         "NRC_WFSS": NrcWfssApcorrModel,
@@ -479,24 +480,33 @@ def populate_time_keywords(input_model, output_model):
 
     Parameters
     ----------
-    input_model : TSOMultiSpecModel
+    input_model : TSOMultiSpecModel or MultiSlitModel
         The input science model.
-    output_model : TSOMultiSpecModel
+    output_model : `~stdatamodels.jwst.datamodels.TSOMultiSpecModel`
         The output science model.  This may be modified in-place.
     """
     nints = input_model.meta.exposure.nints
     int_start = input_model.meta.exposure.integration_start
 
+    if getattr(input_model, "int_times", None) is None:
+        log.warning("INT_TIMES table not found - time keywords will not be populated.")
+        return
+
+    shape = None
     if hasattr(input_model, "data"):
         shape = input_model.data.shape
+    elif hasattr(input_model, "slits") and len(input_model.slits) > 0:
+        shape = input_model.slits[0].data.shape
+
+    if shape is not None:
         if len(shape) == 2:
             num_integ = 1
         else:
             # len(shape) == 3
             num_integ = shape[0]
     else:
-        # e.g. MultiSlit data
-        num_integ = 1
+        log.warning("Not using INT_TIMES table because of unexpected input shape.")
+        return
 
     # This assumes that the spec attribute of output_model has already been created,
     # and spectra have been appended to the spec_table
@@ -541,21 +551,7 @@ def populate_time_keywords(input_model, output_model):
     else:
         num_integrations = 1
 
-    if hasattr(input_model, "int_times") and input_model.int_times is not None:
-        nrows = len(input_model.int_times)
-    else:
-        nrows = 0
-
-    if nrows < 1:
-        log.warning(
-            "There is no INT_TIMES table in the input file - "
-            "Making best guess on integration numbers."
-        )
-
-        # Set a simple integration index
-        for spec in output_model.spec:
-            spec.spec_table["INT_NUM"] = np.arange(1, len(spec.spec_table) + 1)
-        return
+    nrows = len(input_model.int_times)
 
     # If we have a single plane (e.g. ImageModel or MultiSlitModel),
     # we will only populate the keywords if the corresponding uncal file
@@ -566,15 +562,15 @@ def populate_time_keywords(input_model, output_model):
     # int_times-related header keywords.
     skip = False  # initial value
 
-    if isinstance(input_model, (datamodels.MultiSlitModel, datamodels.ImageModel)):
-        if num_integrations > 1:
-            log.warning(
-                "Not using INT_TIMES table because the data have been averaged over integrations."
-            )
-            skip = True
-    elif isinstance(input_model, (datamodels.CubeModel, datamodels.SlitModel)):
-        shape = input_model.data.shape
-
+    if isinstance(
+        input_model,
+        (
+            datamodels.ImageModel,
+            datamodels.CubeModel,
+            datamodels.MultiSlitModel,
+            datamodels.SlitModel,
+        ),
+    ):
         if len(shape) == 2 and num_integrations > 1:
             log.warning(
                 "Not using INT_TIMES table because the data have been averaged over integrations."
@@ -725,6 +721,8 @@ def copy_keyword_info(slit, slitname, spec):
     copy_attributes = [
         "slitlet_id",
         "source_id",
+        "ta_xpos",
+        "ta_ypos",
         "source_xpos",
         "source_ypos",
         "source_ra",
@@ -1101,7 +1099,7 @@ def shift_by_offset(offset, extract_params, update_trace=True):
         Cross-dispersion offset to apply, in pixels.
     extract_params : dict
         Extraction parameters to update, as created by
-        `get_extraction_parameters`.
+        :func:`get_extract_parameters`.
     update_trace : bool
         If True, the trace in ``extract_params['trace']`` is also updated
         if present.
@@ -1141,7 +1139,7 @@ def define_aperture(input_model, slit, extract_params, exp_type):
         unless ``slit`` is None. In that case, they will be retrieved
         from ``input_model``.
     extract_params : dict
-        Extraction parameters, as created by `get_extraction_parameters`.
+        Extraction parameters, as created by :func:`get_extract_parameters`.
     exp_type : str
         Exposure type for the input data.
 
@@ -1369,25 +1367,28 @@ def extract_one_slit(data_model, integration, profile, bg_profile, nod_profile, 
         Residual image from the input minus the scene model.
     """
     # Get the data and variance arrays
+    data = data_model.data
+    var_rnoise = data_model.var_rnoise
+    var_poisson = data_model.var_poisson
+    var_flat = data_model.var_flat
+
     if integration > -1:
         log.debug(f"Extracting integration {integration + 1}")
-        data = data_model.data[integration]
-        var_rnoise = data_model.var_rnoise[integration]
-        var_poisson = data_model.var_poisson[integration]
-        var_flat = data_model.var_flat[integration]
-    else:
-        data = data_model.data
-        var_rnoise = data_model.var_rnoise
-        var_poisson = data_model.var_poisson
-        var_flat = data_model.var_flat
+        data = data[integration]
 
     # Make sure variances match data
-    if var_rnoise.shape != data.shape:
+    if var_rnoise is None or var_rnoise.shape[-2:] != data.shape:
         var_rnoise = np.zeros_like(data)
-    if var_poisson.shape != data.shape:
+    elif integration > -1:
+        var_rnoise = var_rnoise[integration]
+    if var_poisson is None or var_poisson.shape[-2:] != data.shape:
         var_poisson = np.zeros_like(data)
-    if var_flat.shape != data.shape:
+    elif integration > -1:
+        var_poisson = var_poisson[integration]
+    if var_flat is None or var_flat.shape[-2:] != data.shape:
         var_flat = np.zeros_like(data)
+    elif integration > -1:
+        var_flat = var_flat[integration]
 
     # Transpose data for extraction
     if extract_params["dispaxis"] == HORIZONTAL:
@@ -1469,7 +1470,8 @@ def create_extraction(
     are determined collectively, then multiple integrations, if present,
     are each extracted separately.
 
-    The output model must be a `MultiSpecModel` or `TSOMultiSpecModel`,
+    The output model must be a `~stdatamodels.jwst.datamodels.MultiSpecModel`
+    or `~stdatamodels.jwst.datamodels.TSOMultiSpecModel`,
     created before calling this function, and passed as ``output_model``.
     It is updated in place, with new spectral tables appended as they are created.
 
@@ -1495,7 +1497,7 @@ def create_extraction(
        5. Set a DQ array, with DO_NOT_USE flags set where the
           flux is NaN.
        6. Create a spectral table to contain all extracted values
-          and store it in a `SpecModel`.
+          and store it in a `~stdatamodels.jwst.datamodels.SpecModel`.
        7. Apply the aperture correction to the spectral table, if
           available.
        8. Append the new SpecModel to the output_model.
@@ -1829,7 +1831,7 @@ def create_extraction(
                     strict=False,
                 )
             ),
-            dtype=datamodels.SpecModel().spec_table.dtype,
+            dtype=datamodels.SpecModel().get_dtype("spec_table"),
         )
 
         spec = datamodels.SpecModel(spec_table=otab)
@@ -1855,6 +1857,7 @@ def create_extraction(
         spec.spectral_order = sp_order
         spec.dispersion_direction = extract_params["dispaxis"]
         spec.detector = input_model.meta.instrument.detector
+        spec.position_angle = data_model.meta.aperture.position_angle
 
         # Record aperture limits as x/y start/stop values
         lower_limit, upper_limit, left_limit, right_limit = limits
@@ -1922,21 +1925,21 @@ def create_extraction(
             if integ == -1:
                 pass
             elif integ == 0:
-                if input_model.data.shape[0] == 1:
+                if data_model.data.shape[0] == 1:
                     log.info("1 integration done")
                     progress_msg_printed = True
                 else:
                     log.info("... 1 integration done")
-            elif integ == input_model.data.shape[0] - 1:
-                log.info(f"All {input_model.data.shape[0]} integrations done")
+            elif integ == data_model.data.shape[0] - 1:
+                log.info(f"All {data_model.data.shape[0]} integrations done")
                 progress_msg_printed = True
             else:
                 log.info(f"... {integ + 1} integrations done")
 
     if not progress_msg_printed:
-        log.info(f"All {input_model.data.shape[0]} integrations done")
+        log.info(f"All {data_model.data.shape[0]} integrations done")
 
-    if len(spec_list) > 1:
+    if isinstance(output_model, datamodels.TSOMultiSpecModel):
         # For multi-int data, assemble a single TSOSpecModel from the list of spectra
         tso_spec = make_tso_specmodel(spec_list, segment=input_model.meta.exposure.segment_number)
 
@@ -1987,13 +1990,14 @@ def _make_output_model(data_model, meta_source):
         If the input data is multi-integration, a TSOMultiSpecModel is
         returned.  Otherwise, a MultiSpecModel is returned.
     """
-    multi_int = (data_model.data.ndim == 3) and (data_model.data.shape[0] > 1)
-    if multi_int:
+    if data_model.data.ndim == 3:
         output_model = datamodels.TSOMultiSpecModel()
     else:
         output_model = datamodels.MultiSpecModel()
-    if hasattr(meta_source, "int_times"):
+    if getattr(meta_source, "int_times", None) is not None:
         output_model.int_times = meta_source.int_times.copy()
+    if getattr(meta_source, "int_times_stripe", None) is not None:
+        output_model.int_times_stripe = meta_source.int_times_stripe.copy()
     output_model.update(meta_source, only="PRIMARY")
     return output_model
 
@@ -2284,7 +2288,7 @@ def run_extract1d(
             populate_time_keywords(input_model, output_model)
     else:
         log.debug("Not copying from the INT_TIMES table because this is not a TSO exposure.")
-        if hasattr(output_model, "int_times"):
+        if getattr(output_model, "int_times", None) is not None:
             del output_model.int_times
 
     output_model.meta.wcs = None  # See output_model.spec[i].meta.wcs instead.

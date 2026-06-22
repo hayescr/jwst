@@ -1,9 +1,9 @@
-__all__ = ["ResampleSpecStep"]
+import logging
 
 from stdatamodels.jwst import datamodels
 from stdatamodels.jwst.datamodels import ImageModel, MultiSlitModel
 
-from jwst.assign_wcs.util import update_s_region_spectral
+from jwst.assign_wcs.util import is_sky_like, update_s_region_spectral
 from jwst.datamodels import ModelContainer, ModelLibrary
 from jwst.exp_to_source import multislit_to_container
 from jwst.lib.pipe_utils import match_nans_and_flags
@@ -12,8 +12,12 @@ from jwst.resample import ResampleStep, resample_spec
 from jwst.resample.resample_utils import find_miri_lrs_sregion, load_custom_wcs
 from jwst.stpipe import Step
 
+__all__ = ["ResampleSpecStep"]
+
 # Force use of all DQ flagged data except for DO_NOT_USE and NON_SCIENCE
 GOOD_BITS = "~DO_NOT_USE+NON_SCIENCE"
+
+log = logging.getLogger(__name__)
 
 
 class ResampleSpecStep(Step):
@@ -33,6 +37,7 @@ class ResampleSpecStep(Step):
         single = boolean(default=False)  # Resample each input to its own output grid
         blendheaders = boolean(default=True)  # Blend metadata from inputs into output
         in_memory = boolean(default=True)  # Keep images in memory
+        propagate_dq = boolean(default=False)  # propagate DQ during resampling
     """  # noqa: E501
 
     def process(self, input_data):
@@ -49,37 +54,32 @@ class ResampleSpecStep(Step):
         SlitModel or MultiSlitModel
             The resampled output, one slit per source.
         """
-        input_new = datamodels.open(input_data)
+        output_model = self.prepare_output(input_data)
 
-        # Check if input_new is a MultiSlitModel
-        model_is_msm = isinstance(input_new, MultiSlitModel)
+        # Check if input model is a MultiSlitModel
+        model_is_msm = isinstance(output_model, MultiSlitModel)
 
         #  If input is a 3D rateints MultiSlitModel (unsupported) skip the step
-        if model_is_msm and len((input_new[0]).shape) == 3:
-            self.log.warning("Resample spec step will be skipped")
-            input_new.meta.cal_step.resample = "SKIPPED"
+        if model_is_msm and len((output_model[0]).shape) == 3:
+            log.warning("Resample spec step will be skipped")
+            output_model.meta.cal_step.resample = "SKIPPED"
+            return output_model
 
-            return input_new
+        # Convert ImageModel to SlitModel (may be needed for older MIRI LRS data)
+        if isinstance(output_model, ImageModel):
+            slit_model = datamodels.SlitModel(output_model)
+            if output_model is not input_data:
+                output_model.close()
+            output_model = slit_model
 
-        # Convert ImageModel to SlitModel (needed for MIRI LRS)
-        if isinstance(input_new, ImageModel):
-            input_new = datamodels.SlitModel(input_new)
-
-        if isinstance(input_new, ModelContainer):
-            input_models = input_new
-
-            try:
-                output = input_models.meta.asn_table.products[0].name
-            except AttributeError:
-                # NIRSpec MOS data goes through this path, as the container
-                # is only ModelContainer-like, and doesn't have an asn_table
-                # attribute attached.  Output name handling gets done in
-                # _process_multislit() via the update method
-                # TODO: the container-like object should retain asn_table
+        if isinstance(output_model, ModelContainer):
+            input_models = output_model
+            output = input_models.asn_table["products"][0].get("name", "")
+            if str(output).strip() == "":
                 output = None
         else:
-            input_models = ModelContainer([input_new])
-            output = input_new.meta.filename
+            input_models = ModelContainer([output_model])
+            output = output_model.meta.filename
             self.blendheaders = False
 
         # Setup drizzle-related parameters
@@ -114,6 +114,13 @@ class ResampleSpecStep(Step):
             wl_array = get_wavelengths(result)
             result.wavelength = wl_array
 
+        # Output is a new datamodel.
+        # Clean up the input model(s) if they were opened here.
+        if output_model is not input_data:
+            del output_model
+        if input_models is not input_data:
+            del input_models
+
         return result
 
     def _process_multislit(self, input_models):
@@ -122,7 +129,7 @@ class ResampleSpecStep(Step):
 
         Parameters
         ----------
-        input_models : `~jwst.datamodels.ModelContainer`
+        input_models : `~jwst.datamodels.container.ModelContainer`
             A container of `~jwst.datamodels.MultiSlitModel`
 
         Returns
@@ -162,7 +169,11 @@ class ResampleSpecStep(Step):
             with drizzled_library:
                 for i, model in enumerate(drizzled_library):
                     self.update_slit_metadata(model)
-                    update_s_region_spectral(model)
+                    if not is_sky_like(model.meta.wcs.output_frame):
+                        # Output WCS is not celestial: unset the S_REGION
+                        model.meta.wcsinfo.s_region = None
+                    else:
+                        update_s_region_spectral(model)
                     result.slits.append(model)
                     drizzled_library.shelve(model, i, modify=False)
             del drizzled_library
@@ -196,6 +207,7 @@ class ResampleSpecStep(Step):
             "weight_type": self.weight_type,
             "good_bits": GOOD_BITS,
             "blendheaders": self.blendheaders,
+            "propagate_dq": self.propagate_dq,
         }
 
         # Custom output WCS parameters
@@ -209,7 +221,7 @@ class ResampleSpecStep(Step):
 
         # Report values to processing log
         for k, v in kwargs.items():
-            self.log.debug(f"   {k}={v}")
+            log.debug(f"   {k}={v}")
 
         kwargs["wcs_pars"] = wcs_pars
 
@@ -221,7 +233,7 @@ class ResampleSpecStep(Step):
 
         Parameters
         ----------
-        input_models : `~jwst.datamodels.ModelContainer`
+        input_models : `~jwst.datamodels.container.ModelContainer`
             A container of `~jwst.datamodels.ImageModel`
             or `~jwst.datamodels.SlitModel`
 
@@ -263,9 +275,19 @@ class ResampleSpecStep(Step):
             s_region_model1 = input_models[0].meta.wcsinfo.s_region
             s_region = find_miri_lrs_sregion(s_region_model1, result.meta.wcs)
             result.meta.wcsinfo.s_region = s_region
-            self.log.info(f"Updating S_REGION: {s_region}.")
+            log.info(f"Updating S_REGION: {s_region}.")
+
+            # Transform source_xpos and source_ypos to resampled image frame, since they
+            # are defined in full-frame coordinates for MIRI LRS Fixed Slit
+            input_wcs = input_models[0].meta.wcs
+            self._transform_sourcepos(input_wcs, result)
         else:
-            update_s_region_spectral(result)
+            if not is_sky_like(result.meta.wcs.output_frame):
+                # Output WCS is not celestial: unset the S_REGION
+                result.meta.wcsinfo.s_region = None
+            else:
+                update_s_region_spectral(result)
+
         return result
 
     def update_slit_metadata(self, model):
@@ -300,3 +322,26 @@ class ResampleSpecStep(Step):
             else:
                 if val is not None:
                     setattr(model, attr, val)
+
+    def _transform_sourcepos(self, input_wcs, model):
+        """
+        Transform source_xpos and source_ypos to the resampled image frame.
+
+        Updates are made in-place.
+
+        Parameters
+        ----------
+        model : `~jwst.datamodels.SlitModel`
+            The resampled slit model to update.
+        """
+        if not (model.hasattr("source_xpos") and model.hasattr("source_ypos")):
+            return
+        x_in, y_in = model.source_xpos, model.source_ypos
+        ra_in, dec_in = input_wcs.pixel_to_world(x_in, y_in)
+        x_out, y_out = model.meta.wcs.world_to_pixel(ra_in, dec_in)
+        log.info(
+            "Transforming source_xpos and source_ypos to resampled image frame. "
+            f"New values: ({x_out}, {y_out})"
+        )
+        model.source_xpos = x_out
+        model.source_ypos = y_out

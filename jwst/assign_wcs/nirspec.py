@@ -6,7 +6,6 @@ Calls create_pipeline() which redirects based on EXP_TYPE.
 
 import copy
 import logging
-import warnings
 
 import gwcs
 import numpy as np
@@ -19,9 +18,11 @@ from astropy.modeling.models import Const1D, Identity, Mapping, Scale, Tabular1D
 from astropy.modeling.rotations import Rotation2D
 from gwcs import coordinate_frames as cf
 from gwcs import selector
+from gwcs.spectroscopy import AnglesFromGratingEquation3D, WavelengthFromGratingEquation
 from gwcs.wcstools import grid_from_bounding_box
 from stdatamodels.jwst.datamodels import (
     CameraModel,
+    ChromCorrModel,
     CollimatorModel,
     DisperserModel,
     FOREModel,
@@ -34,7 +35,6 @@ from stdatamodels.jwst.datamodels import (
     WavelengthrangeModel,
 )
 from stdatamodels.jwst.transforms.models import (
-    AngleFromGratingEquation,
     DirCos2Unitless,
     Gwa2Slit,
     Logical,
@@ -42,10 +42,8 @@ from stdatamodels.jwst.transforms.models import (
     Rotation3DToGWA,
     Slit,
     Slit2Msa,
-    Slit2MsaLegacy,
     Snell,
     Unitless2DirCos,
-    WavelengthFromGratingEquation,
 )
 
 from jwst.assign_wcs import pointing
@@ -76,6 +74,7 @@ __all__ = [
     "nrs_wcs_set_input",
     "nrs_ifu_wcs",
     "get_spectral_order_wrange",
+    "spectral_order_wrange_from_model",
 ]
 
 
@@ -85,7 +84,7 @@ def create_pipeline(input_model, reference_files, slit_y_range):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -95,7 +94,7 @@ def create_pipeline(input_model, reference_files, slit_y_range):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     exp_type = input_model.meta.exposure.type.lower()
     if input_model.meta.instrument.grating.lower() == "mirror":
@@ -114,16 +113,18 @@ def imaging(input_model, reference_files):
     Create the WCS pipeline for NIRSpec imaging data.
 
     It has the following coordinate frames:
-    "detector" : the science frame
-    "sca" : frame associated with the SCA
-    "gwa" " just before the GWA going from detector to sky
-    "msa_frame" : at the MSA
-    "oteip" : after the FWA
-    "v2v3" and "world"
+
+    * "detector": the science frame
+    * "sca": frame associated with the SCA
+    * "gwa": just before the GWA going from detector to sky
+    * "msa_frame": at the MSA
+    * "oteip": after the FWA
+    * "v2v3"
+    * "world"
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -133,7 +134,7 @@ def imaging(input_model, reference_files):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     # Get the corrected disperser model
     disperser = get_disperser(input_model, reference_files["disperser"])
@@ -241,30 +242,33 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
     Create the WCS pipeline for NIRSpec IFU data.
 
     The coordinate frames are:
-    "detector" : the science frame
-    "sca" : frame associated with the SCA
-    "gwa" " just before the GWA going from detector to sky
-    "slit_frame" : frame associated with the virtual slit
-    "slicer' : frame associated with the slicer
-    "msa_frame" : at the MSA
-    "oteip" : after the FWA
-    "v2v3" and "world"
+
+    * "detector": the science frame
+    * "sca": frame associated with the SCA
+    * "gwa": just before the GWA going from detector to sky
+    * "slit_frame": relative position within each slice in dimensionless units
+    * "slicer": frame associated with the slicer
+    * "msa_frame": at the MSA
+    * "oteip": after the FWA
+    * "oteip_chromcorr": after the chromaticity correction
+    * "v2v3"
+    * "world"
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
         Requires the 'ifufore', 'ifuslicer', 'ifupost', 'disperser', 'wavelengthrange',
-        'fpa', 'camera', 'collimator', 'fore', and 'ote' reference files.
+        'fpa', 'camera', 'collimator', 'fore', 'chromcorr', and 'ote' reference files.
     slit_y_range : tuple
         The slit Y-range for Nirspec slits, relative to (0, 0) in the center.
 
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     detector = input_model.meta.instrument.detector
     grating = input_model.meta.instrument.grating
@@ -320,9 +324,19 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
     slicer2msa = slicer_to_msa(reference_files)
     slicer2msa.name = "slicer2msa"
 
-    det, sca, gwa, slit_frame, slicer_frame, msa_frame, oteip, v2v3, v2v3vacorr, world = (
-        create_frames()
-    )
+    (
+        det,
+        sca,
+        gwa,
+        slit_frame,
+        slicer_frame,
+        msa_frame,
+        oteip,
+        oteip_chromcorr,
+        v2v3,
+        v2v3vacorr,
+        world,
+    ) = create_frames()
 
     exp_type = input_model.meta.exposure.type.upper()
 
@@ -346,6 +360,13 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
     msa2oteip.name = "msa2oteip"
     msa2oteip.inputs = ("x_msa", "y_msa", "lam", "name")
     msa2oteip.outputs = ("x_ote", "y_ote", "lam", "name")
+
+    # Transform to correct OTEIP for wavelength dependent spatial shifts
+    # due to chromaticity of NIRSpec fore-optics
+    chrom_corr = oteip_to_chromcorr(reference_files) & Identity(1)
+    chrom_corr.name = "chrom_corr"
+    chrom_corr.inputs = ("x_ote", "y_ote", "lam", "name")
+    chrom_corr.outputs = ("x_ote", "y_ote", "lam", "name")
 
     # OTEIP to V2,V3 transform
     # This includes a wavelength unit conversion from meters to microns.
@@ -384,7 +405,8 @@ def ifu(input_model, reference_files, slit_y_range=(-0.55, 0.55)):
         (slit_frame, slit2slicer),
         (slicer_frame, slicer2msa),
         (msa_frame, msa2oteip),
-        (oteip, oteip2v23),
+        (oteip, chrom_corr),
+        (oteip_chromcorr, oteip2v23),
         (v2v3, va_corr),
         (v2v3vacorr, tel2sky),
         (world, None),
@@ -398,18 +420,19 @@ def slits_wcs(input_model, reference_files, slit_y_range):
     Create the WCS pipeline for MOS and fixed slits.
 
     The coordinate frames are:
-    "detector" : the science frame
-    "sca" : frame associated with the SCA
-    "gwa" " just before the GWA going from detector to sky
-    "slit_frame" : frame associated with the virtual slit
-    "msa_frame" : at the MSA
-    "oteip" : after the FWA
-    "v2v3" : at V2V3
-    "world" : sky and spectral
+
+    * "detector": the science frame
+    * "sca": frame associated with the SCA
+    * "gwa": just before the GWA going from detector to sky
+    * "slit_frame": relative position within each slit in dimensionless units
+    * "msa_frame": at the MSA
+    * "oteip": after the FWA
+    * "v2v3": at V2V3
+    * "world": sky and spectral
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -421,7 +444,7 @@ def slits_wcs(input_model, reference_files, slit_y_range):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     open_slits_id = get_open_slits(input_model, reference_files, slit_y_range)
     if not open_slits_id:
@@ -442,7 +465,7 @@ def slitlets_wcs(input_model, reference_files, open_slits_id):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -454,7 +477,7 @@ def slitlets_wcs(input_model, reference_files, open_slits_id):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
 
     Notes
     -----
@@ -486,10 +509,20 @@ def slitlets_wcs(input_model, reference_files, open_slits_id):
     slit2msa = slit_to_msa(open_slits_id, reference_files["msa"])
     slit2msa.name = "slit2msa"
 
-    # Create coordinate frames in the NIRSPEC WCS pipeline"
-    # "detector", "gwa", "slit_frame", "msa_frame", "oteip", "v2v3", "v2v3vacorr", "world"
-    # _ would be the slicer_frame that is not used
-    det, sca, gwa, slit_frame, _, msa_frame, oteip, v2v3, v2v3vacorr, world = create_frames()
+    # Create coordinate frames in the NIRSPEC WCS pipeline
+    (
+        det,
+        sca,
+        gwa,
+        slit_frame,
+        _slicer_frame,
+        msa_frame,
+        oteip,
+        _oteip_chromcorr,
+        v2v3,
+        v2v3vacorr,
+        world,
+    ) = create_frames()
 
     exp_type = input_model.meta.exposure.type.upper()
 
@@ -556,7 +589,7 @@ def get_open_slits(input_model, reference_files=None, slit_y_range=(-0.55, 0.55)
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -571,11 +604,7 @@ def get_open_slits(input_model, reference_files=None, slit_y_range=(-0.55, 0.55)
         A list of `~stdatamodels.jwst.transforms.models.Slit` objects.
     """
     exp_type = input_model.meta.exposure.type.lower()
-    lamp_mode = input_model.meta.instrument.lamp_mode
-    if isinstance(lamp_mode, str):
-        lamp_mode = lamp_mode.lower()
-    else:
-        lamp_mode = "none"
+    lamp_mode = str(input_model.meta.instrument.lamp_mode).lower()
 
     # MOS/MSA exposure requiring MSA metadata file
     if exp_type in ["nrs_msaspec", "nrs_autoflat"] or (
@@ -640,7 +669,7 @@ def get_open_fixed_slits(input_model, slit_y_range=(-0.55, 0.55)):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     slit_y_range : tuple
         The slit Y-range for Nirspec slits, relative to (0, 0) in the center.
@@ -828,23 +857,24 @@ def get_open_msa_slits(
 
     Computes (ymin, ymax) for each open slitlet.
 
-    The msa_file is expected to contain data (tuples) with the following fields:
+    The msa_file is expected to contain data (tuples) with the following fields::
 
-        ('slitlet_id', '>i2'),
-        ('msa_metadata_id', '>i2'),
-        ('shutter_quadrant', '>i2'),
-        ('shutter_row', '>i2'),
-        ('shutter_column', '>i2'),
-        ('source_id', '>i2'),
-        ('background', 'S1'),
-        ('shutter_state', 'S6'),
-        ('estimated_source_in_shutter_x', '>f4'),
-        ('estimated_source_in_shutter_y', '>f4'),
-        ('dither_point_index', '>i2'),
-        ('primary_source', 'S1')
+        ("slitlet_id", ">i2")
+        ("msa_metadata_id", ">i2")
+        ("shutter_quadrant", ">i2")
+        ("shutter_row", ">i2")
+        ("shutter_column", ">i2")
+        ("source_id", ">i2")
+        ("background", "S1")
+        ("shutter_state", "S6")
+        ("estimated_source_in_shutter_x", ">f4")
+        ("estimated_source_in_shutter_y", ">f4")
+        ("dither_point_index", ">i2")
+        ("primary_source", "S1")
 
-    For example, something like:
-        (12, 2, 4, 251, 22, 1, 'Y', 'OPEN', nan, nan, 1, 'N'),
+    For example, something like::
+
+        (12, 2, 4, 251, 22, 1, "Y", "OPEN", nan, nan, 1, "N")
 
     Parameters
     ----------
@@ -861,7 +891,7 @@ def get_open_msa_slits(
     slit_scales : dict or None
         A dictionary of scaling factors for MSA shutters.  Keys are integer quadrant values
         (one-indexed).  Values are 2-tuples of float values (scale_x, scale_y).
-        If not provided, default values from `MSA_SLIT_SCALES` are used.
+        If not provided, default values from ``MSA_SLIT_SCALES`` are used.
 
     Returns
     -------
@@ -1125,8 +1155,8 @@ def get_open_msa_slits(
         # The source x,y position in the shutter is given in the msa configuration file,
         # columns "estimated_source_in_shutter_x" and "estimated_source_in_shutter_y".
         # The source position is in a coordinate system associated with each shutter whose
-        # origin is the lower left corner of the shutter, positive x is to the right
-        # and positive y is upwards.
+        # origin is the upper right corner of the shutter, positive x is to the left
+        # and positive y is downwards.
         source_xpos -= 0.5
         source_ypos -= 0.5
 
@@ -1207,7 +1237,7 @@ def get_spectral_order_wrange(input_model, wavelengthrange_file):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     wavelengthrange_file : str
         Reference file of type "wavelengthrange".
@@ -1339,7 +1369,7 @@ def slit_to_msa(open_slits, msafile):
 
     Returns
     -------
-    model : `~stdatamodels.jwst.transforms.Slit2Msa` model.
+    model : `~stdatamodels.jwst.transforms.Slit2Msa`
         Transform from ``slit_frame`` to ``msa_frame``.
     """
     msa = MSAModel(msafile)
@@ -1384,9 +1414,9 @@ def gwa_to_ifuslit(slits, input_model, disperser, reference_files, slit_y_range)
     ----------
     slits : list
         A list of slit IDs for all IFU slits 0-29.
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
-    disperser : `~jwst.datamodels.DisperserModel`
+    disperser : `~stdatamodels.jwst.datamodels.DisperserModel`
         A disperser model with the GWA correction applied to it.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -1412,6 +1442,7 @@ def gwa_to_ifuslit(slits, input_model, disperser, reference_files, slit_y_range)
         if velosys is not None:
             velocity_corr = velocity_correction(input_model.meta.wcsinfo.velosys)
             lgreq = lgreq | velocity_corr
+            agreq = velocity_corr.inverse & Identity(3) | agreq
             log.info(
                 f"Applied Barycentric velocity correction : {velocity_corr[1].amplitude.value}"
             )
@@ -1486,7 +1517,7 @@ def gwa_to_slit(open_slits, input_model, disperser, reference_files):
     ----------
     open_slits : list
         A list of slit IDs for all open shutters/slitlets.
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     disperser : dict
         A corrected disperser ASDF object.
@@ -1511,6 +1542,7 @@ def gwa_to_slit(open_slits, input_model, disperser, reference_files):
         if velosys is not None:
             velocity_corr = velocity_correction(input_model.meta.wcsinfo.velosys)
             lgreq = lgreq | velocity_corr
+            agreq = velocity_corr.inverse & Identity(3) | agreq
             log.info(
                 f"Applied Barycentric velocity correction : {velocity_corr[1].amplitude.value}"
             )
@@ -1585,7 +1617,7 @@ def angle_from_disperser(disperser, input_model):
     ----------
     disperser : dict
         A corrected disperser ASDF object.
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
 
     Returns
@@ -1595,7 +1627,13 @@ def angle_from_disperser(disperser, input_model):
     """
     sporder = input_model.meta.wcsinfo.spectral_order
     if input_model.meta.instrument.grating.lower() != "prism":
-        agreq = AngleFromGratingEquation(disperser.groovedensity, sporder, name="alpha_from_greq")
+        # Don't need z coordinate for angle computation so map it out
+        # alpha angle has opposite sign convention in gwcs
+        agreq = (
+            Mapping((0, 1, 2), n_inputs=4)
+            | Identity(1) & Scale(-1) & Identity(1)
+            | AnglesFromGratingEquation3D(disperser.groovedensity, sporder, name="alpha_from_greq")
+        )
         return agreq
 
     system_temperature = input_model.meta.instrument.gwa_tilt
@@ -1629,7 +1667,7 @@ def wavelength_from_disperser(disperser, input_model):
     ----------
     disperser : dict
         A corrected disperser ASDF object.
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
 
     Returns
@@ -1639,9 +1677,14 @@ def wavelength_from_disperser(disperser, input_model):
     """
     sporder = input_model.meta.wcsinfo.spectral_order
     if input_model.meta.instrument.grating.lower() != "prism":
-        lgreq = WavelengthFromGratingEquation(
-            disperser.groovedensity, sporder, name="lambda_from_gratingeq"
-        )
+        # Don't need z coordinate for angle computation so map it out
+        lgreq = (
+            Mapping((0, 2), n_inputs=3)
+            | WavelengthFromGratingEquation(
+                disperser.groovedensity, sporder, name="lambda_from_gratingeq"
+            )
+            | Scale(-1)
+        )  # alpha angle has opposite sign convention in gwcs
         return lgreq
 
     lam = np.arange(0.3, 8.005, 0.005) * 1e-6
@@ -1683,7 +1726,7 @@ def detector_to_gwa(reference_files, detector, disperser):
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         Transform from DETECTOR frame to GWA frame.
     """
     with FPAModel(reference_files["fpa"]) as f:
@@ -1729,12 +1772,12 @@ def dms_to_sca(input_model):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model`
+    model : `~astropy.modeling.Model`
         Transform from DMS frame to SCA frame.
     """
     detector = input_model.meta.instrument.detector
@@ -1776,7 +1819,7 @@ def mask_slit(ymin=-0.55, ymax=0.55):
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model`
+    model : `~astropy.modeling.Model`
         A model which takes x_slit, y_slit, lam inputs and substitutes the
         values outside the slit with NaN.
     """
@@ -1809,7 +1852,7 @@ def compute_bounding_box(
 
     Parameters
     ----------
-    transform : `astropy.modeling.core.Model`
+    transform : `astropy.modeling.Model`
         The transform from detector to slit.
         `nrs_wcs_set_input` uses "detector to slit", validate_open_slits uses "slit to detector".
     slit_name : int, str, None
@@ -1899,7 +1942,7 @@ def generate_compound_bbox(input_model, slits=None, wavelength_range=None, refin
 
     Parameters
     ----------
-    input_model : DataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Input model with WCS set in meta.wcs.
     slits : list or None, optional
         A list of Slit objects.  If not specified, open slits are retrieved
@@ -1907,7 +1950,7 @@ def generate_compound_bbox(input_model, slits=None, wavelength_range=None, refin
     wavelength_range : list or tuple or None, optional
         Wavelength range for the combination of filter and grating.
         If not specified, the range is calculated by calling
-        `spectral_order_wrange_from_model`.
+        :func:`spectral_order_wrange_from_model`.
     refine : bool, optional
         If True, the initial bounding box will be refined to limit it to
         ranges with valid wavelengths if possible.
@@ -1959,6 +2002,7 @@ def collimator_to_gwa(reference_files, disperser):
     Transform from collimator to ``gwa`` frame.
 
     Includes the transforms:
+
     - through the collimator (going from sky to detector)
     - converting from unitless to directional cosines
     - a 3D rotation before the GWA using th ecorrected disperser angles.
@@ -1973,7 +2017,7 @@ def collimator_to_gwa(reference_files, disperser):
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         Transform from collimator to ``gwa`` frame.
     """
     with CollimatorModel(reference_files["collimator"]) as f:
@@ -1991,7 +2035,7 @@ def get_disperser(input_model, disperserfile):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     disperserfile : str
         The name of the disperser reference file.
@@ -2014,7 +2058,7 @@ def correct_tilt(disperser, xtilt, ytilt):
 
     Parameters
     ----------
-    disperser : `~jwst.datamodels.DisperserModel`
+    disperser : `~stdatamodels.jwst.datamodels.DisperserModel`
         Disperser information.
     xtilt : float
         Value of GWAXTILT keyword - angle in arcsec
@@ -2023,7 +2067,7 @@ def correct_tilt(disperser, xtilt, ytilt):
 
     Returns
     -------
-    disp : `~jwst.datamodels.DisperserModel`
+    disp : `~stdatamodels.jwst.datamodels.DisperserModel`
         Corrected DisperserModel.
 
     Notes
@@ -2070,7 +2114,7 @@ def ifu_msa_to_oteip(reference_files):
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         Transform from MSA to OTEIP.
     """
     with FOREModel(reference_files["fore"]) as f:
@@ -2094,7 +2138,7 @@ def msa_to_oteip(reference_files):
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         Transform from MSA to OTEIP.
     """
     with FOREModel(reference_files["fore"]) as f:
@@ -2102,6 +2146,33 @@ def msa_to_oteip(reference_files):
     msa2fore_mapping = Mapping((0, 1, 2, 2), name="msa2fore_mapping")
     msa2fore_mapping.inverse = Identity(3)
     return msa2fore_mapping | (fore & Identity(1))
+
+
+def oteip_to_chromcorr(reference_files):
+    """
+    Transform to correct ``oteip`` frame for chromaticity effects.
+
+    The output transform takes in x_ote, y_ote, and wavelength,
+    and returns x_ote_corrected, y_ote_corrected, and wavelength.
+
+    Parameters
+    ----------
+    reference_files : dict
+        Mapping between reftype (keys) and reference file name (vals).
+        Requires the 'ote' reference file.
+
+    Returns
+    -------
+    model : `~astropy.modeling.Model`
+        Transform to correct ``oteip`` frame for fore-optics chromaticity effects.
+    """
+    with ChromCorrModel(reference_files["chromcorr"]) as f:
+        chrom_corr = f.model
+    # Identity is needed because the parts of the WCS pipeline before or after this
+    # are asymmetric in inputs/outputs. This should be fixed in the future, for now
+    # this hack allows round-trip
+    chrom_corr.inverse = chrom_corr.inverse & Identity(1)
+    return chrom_corr
 
 
 def oteip_to_v23(reference_files):
@@ -2116,7 +2187,7 @@ def oteip_to_v23(reference_files):
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         Transform from ``oteip`` to ``v2v3`` frame.
     """
     with OTEModel(reference_files["ote"]) as f:
@@ -2139,7 +2210,7 @@ def create_frames():
 
     Returns
     -------
-    det, sca, gwa, slit_frame, slicer_frame, msa_frame, oteip, v2v3, v2v3vacorr, world : tuple
+    tuple
         The coordinate frames. Each is a `~gwcs.coordinate_frames.CoordinateFrame` object.
     """
     det = cf.Frame2D(name="detector", axes_order=(0, 1))
@@ -2150,6 +2221,11 @@ def create_frames():
     msa_spatial = cf.Frame2D(
         name="msa_spatial", axes_order=(0, 1), unit=(u.m, u.m), axes_names=("x_msa", "y_msa")
     )
+    # Frame providing relative positions within each slit, slitlet, or slice in
+    # dimensionless units.  The center of the slit, slice, or primary shutter
+    # is defined at (0, 0) and edges at +/- 0.5.  MSA slitlet coordinates are
+    # defined relative to the open shutter area, not the full shutter pitch
+    # that includes the MSA bars.
     slit_spatial = cf.Frame2D(
         name="slit_spatial", axes_order=(0, 1), unit=("", ""), axes_names=("x_slit", "y_slit")
     )
@@ -2181,8 +2257,21 @@ def create_frames():
         name="oteip", axes_order=(0, 1), unit=(u.deg, u.deg), axes_names=("X_OTEIP", "Y_OTEIP")
     )
     oteip = cf.CompositeFrame([oteip_spatial, spec], name="oteip")
+    oteip_chromcorr = cf.CompositeFrame([oteip_spatial, spec], name="oteip_chromcorr")
     world = cf.CompositeFrame([sky, spec], name="world")
-    return det, sca, gwa, slit_frame, slicer_frame, msa_frame, oteip, v2v3, v2v3vacorr, world
+    return (
+        det,
+        sca,
+        gwa,
+        slit_frame,
+        slicer_frame,
+        msa_frame,
+        oteip,
+        oteip_chromcorr,
+        v2v3,
+        v2v3vacorr,
+        world,
+    )
 
 
 def create_imaging_frames():
@@ -2221,12 +2310,12 @@ def get_slit_location_model(slitdata):
     ----------
     slitdata : ndarray
         An array of shape (5,) with elements:
-        slit_id, xcenter, ycenter, xsize, ysize
+        slit_id, xcenter, ycenter, xsize, ysize.
         This is the slit info in the MSa description file.
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         A model which transforms relative position on the slit to
         absolute positions in the quadrant.
         This is later combined with the quadrant model to return
@@ -2248,7 +2337,7 @@ def gwa_to_ymsa(msa2gwa_model, lam_cen=None, slit=None, slit_y_range=None):
 
     Parameters
     ----------
-    msa2gwa_model : `astropy.modeling.core.Model`
+    msa2gwa_model : `astropy.modeling.Model`
         The transform from the MSA to the GWA.
     lam_cen : float
         Central wavelength in meters.
@@ -2260,7 +2349,7 @@ def gwa_to_ymsa(msa2gwa_model, lam_cen=None, slit=None, slit_y_range=None):
 
     Returns
     -------
-    tab : `~astropy.modeling.Tabular1D`
+    tab : `~astropy.modeling.tabular.Tabular1D`
         A 1D lookup table model.
     """
     nstep = 1000
@@ -2280,109 +2369,6 @@ def gwa_to_ymsa(msa2gwa_model, lam_cen=None, slit=None, slit_y_range=None):
 
     tab = Tabular1D(points=(beta_in,), lookup_table=dy, bounds_error=False, name="tabular")
     return tab
-
-
-def _nrs_wcs_set_slit_input_legacy(input_model, slit_name):
-    """
-    Return a WCS object for a specific slit, slice or shutter.
-
-    Does not compute the bounding box.
-
-    Parameters
-    ----------
-    input_model : JwstDataModel
-        A WCS object for the all open slitlets in an observation.
-    slit_name : int or str
-        Slit.name of an open slit.
-
-    Returns
-    -------
-    wcsobj : `~gwcs.wcs.WCS`
-        WCS object for this slit.
-    """
-    wcsobj = input_model.meta.wcs
-
-    slit_wcs = copy.deepcopy(wcsobj)
-    slit_wcs.set_transform("sca", "gwa", wcsobj.pipeline[1].transform[1:])
-    g2s = slit_wcs.pipeline[2].transform
-    slit_wcs.set_transform("gwa", "slit_frame", g2s.get_model(slit_name))
-
-    exp_type = input_model.meta.exposure.type
-    is_nirspec_ifu = is_nrs_ifu_lamp(input_model) or (exp_type.lower() == "nrs_ifu")
-    if is_nirspec_ifu:
-        slit_wcs.set_transform(
-            "slit_frame", "slicer", wcsobj.pipeline[3].transform.get_model(slit_name) & Identity(1)
-        )
-    else:
-        slit_wcs.set_transform(
-            "slit_frame",
-            "msa_frame",
-            wcsobj.pipeline[3].transform.get_model(slit_name) & Identity(1),
-        )
-    return slit_wcs
-
-
-def nrs_wcs_set_input_legacy(
-    input_model, slit_name, wavelength_range=None, slit_y_low=None, slit_y_high=None
-):
-    """
-    Return a WCS object for a specific slit, slice or shutter.
-
-    This function is intended to work with old-style NIRSpec WCS implementations,
-    to support reading in WCS data from existing datamodels.  For new datamodels,
-    produced after v1.18.0, use `nrs_wcs_set_input`.
-
-    Parameters
-    ----------
-    input_model : JwstDataModel
-        A WCS object for the all open slitlets in an observation.
-    slit_name : int or str
-        Slit.name of an open slit.
-    wavelength_range : list
-        Wavelength range for the combination of filter and grating.
-    slit_y_low, slit_y_high : float
-        The lower and upper bounds of the slit. Optional.
-
-    Returns
-    -------
-    wcsobj : `~gwcs.wcs.WCS`
-        WCS object for this slit.
-    """
-    warnings.warn(
-        "The nrs_wcs_set_input_legacy function is intended for use with an "
-        "old-style NIRSpec WCS pipeline. "
-        "It will be removed in a future build.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    def _get_y_range(input_model):
-        # get the open slits from the model
-        # Need them to get the slit ymin,ymax
-        g2s = input_model.meta.wcs.get_transform("gwa", "slit_frame")
-        open_slits = g2s.slits
-        slit = [s for s in open_slits if s.name == slit_name][0]
-        return slit.ymin, slit.ymax
-
-    if wavelength_range is None:
-        _, wavelength_range = spectral_order_wrange_from_model(input_model)
-
-    slit_wcs = _nrs_wcs_set_slit_input_legacy(input_model, slit_name)
-    transform = slit_wcs.get_transform("detector", "slit_frame")
-    is_nirspec_ifu = (
-        is_nrs_ifu_lamp(input_model) or input_model.meta.exposure.type.lower() == "nrs_ifu"
-    )
-    if is_nirspec_ifu:
-        bb = compute_bounding_box(transform, None, wavelength_range)
-    else:
-        if slit_y_low is None or slit_y_high is None:
-            slit_y_low, slit_y_high = _get_y_range(input_model)
-        bb = compute_bounding_box(
-            transform, None, wavelength_range, slit_ymin=slit_y_low, slit_ymax=slit_y_high
-        )
-
-    slit_wcs.bounding_box = bb
-    return slit_wcs
 
 
 def _fix_slit_name(transform, slit_name):
@@ -2406,14 +2392,14 @@ def _fix_slit_name(transform, slit_name):
 
     Parameters
     ----------
-    transform : `astropy.modeling.core.Model` or None
+    transform : `astropy.modeling.Model` or None
         The transform to fix.
     slit_name : int or float
         The slit name to fix to.
 
     Returns
     -------
-    new_transform : `astropy.modeling.core.Model`
+    new_transform : `astropy.modeling.Model`
         A new transform fixed to the input slit.  The "name" input is not
         required for the new transform, and it is not provided on output.
     """
@@ -2549,7 +2535,7 @@ def nrs_wcs_set_input(input_model, slit_name):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         A datamodel that contains a WCS object for the all open slitlets in
         an observation.
     slit_name : int or str
@@ -2562,13 +2548,6 @@ def nrs_wcs_set_input(input_model, slit_name):
     """
     # Get the full WCS object
     full_wcs = input_model.meta.wcs
-
-    # Check for an old-style WCS that needs different handling
-    for step in full_wcs.pipeline:
-        if isinstance(step.transform, Slit2MsaLegacy):
-            # There is a legacy slit2msa transform somewhere in the pipeline.
-            # Use the old deepcopy-and-replace method.
-            return nrs_wcs_set_input_legacy(input_model, slit_name)
 
     # Convert FS slit names to numbers
     if str(slit_name).upper() in FIXED_SLIT_NUMS.keys():
@@ -2625,7 +2604,7 @@ def validate_open_slits(input_model, open_slits, reference_files):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     open_slits : list
         List of open slits.
@@ -2709,7 +2688,7 @@ def spectral_order_wrange_from_model(input_model):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The data model. Must have been through the assign_wcs step.
 
     Returns
@@ -2730,7 +2709,7 @@ def nrs_ifu_wcs(input_model):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The data model. Must have passed through the assign_wcs step.
 
     Returns
@@ -2755,7 +2734,7 @@ def apply_slicemap(input_model, replace_wcs=True):
 
     Parameters
     ----------
-    input_model : IFUImageModel
+    input_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         Input NIRSpec IFU model to be updated.
     replace_wcs : bool
         If False, ``input_model.meta.wcs`` is not modified.
@@ -2853,7 +2832,8 @@ def apply_slicemap(input_model, replace_wcs=True):
 
     # Fix the slit name input for all further transforms - the value is not relevant.
     slicer_idx = full_wcs.available_frames.index("slicer")
-    new_pipeline = [("coordinates", input2det), (full_wcs.pipeline[0].frame, det2slicer)]
+    coord_frame = gwcs.coordinate_frames.Frame2D(name="coordinates", axes_order=(0, 1))
+    new_pipeline = [(coord_frame, input2det), (full_wcs.pipeline[0].frame, det2slicer)]
     for step in full_wcs.pipeline[slicer_idx:]:
         new_transform = _fix_slit_name(step.transform, 0)
         new_pipeline.append((step.frame, new_transform))
@@ -2871,12 +2851,12 @@ def _create_ifupost_transform(ifupost_slice):
 
     Parameters
     ----------
-    ifupost_slice : `jwst.datamodels.properties.ObjectNode`
+    ifupost_slice : stdatamodels.properties.ObjectNode
         IFUPost transform for a specific slice
 
     Returns
     -------
-    model : `~astropy.modeling.core.Model` model.
+    model : `~astropy.modeling.Model`
         The transform for this slice.
     """
     linear = ifupost_slice.linear
@@ -2913,7 +2893,7 @@ def nrs_lamp(input_model, reference_files, slit_y_range):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -2924,13 +2904,9 @@ def nrs_lamp(input_model, reference_files, slit_y_range):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
-    lamp_mode = input_model.meta.instrument.lamp_mode
-    if isinstance(lamp_mode, str):
-        lamp_mode = lamp_mode.lower()
-    else:
-        lamp_mode = "none"
+    lamp_mode = str(input_model.meta.instrument.lamp_mode).lower()
     if lamp_mode in ["fixedslit", "brightobj"]:
         return slits_wcs(input_model, reference_files, slit_y_range)
     elif lamp_mode == "ifu":

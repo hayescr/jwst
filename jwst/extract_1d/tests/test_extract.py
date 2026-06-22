@@ -4,11 +4,14 @@ import numpy as np
 import pytest
 import stdatamodels.jwst.datamodels as dm
 from astropy.modeling import polynomial
+from astropy.modeling.models import Scale
 from numpy.testing import assert_allclose, assert_equal
 
 from jwst.datamodels import ModelContainer
 from jwst.extract_1d import extract as ex
+from jwst.extract_1d import ifu
 from jwst.extract_1d import psf_profile as pp
+from jwst.extract_1d.extract_1d_step import Extract1dStep
 
 
 @pytest.fixture()
@@ -327,27 +330,6 @@ def test_populate_time_keywords(mock_nirspec_bots, mock_10_multi_int_spec):
         assert spec["TDB-END"] == mock_nirspec_bots.int_times["int_end_BJD_TDB"][i]
 
 
-def test_populate_time_keywords_no_table(
-    mock_nirspec_fs_one_slit, mock_10_multi_int_spec, log_watcher
-):
-    watcher = log_watcher("jwst.extract_1d.extract", message="no INT_TIMES table")
-    ex.populate_time_keywords(mock_nirspec_fs_one_slit, mock_10_multi_int_spec)
-
-    # No int_times table: warns and integration is set to simple index
-    watcher.assert_seen()
-    for spec in mock_10_multi_int_spec.spec:
-        assert_equal(spec.spec_table["INT_NUM"], np.arange(1, 11))
-
-
-def test_populate_time_keywords_multislit(mock_nirspec_mos, mock_10_multi_int_spec):
-    mock_nirspec_mos.meta.exposure.nints = 10
-    ex.populate_time_keywords(mock_nirspec_mos, mock_10_multi_int_spec)
-
-    # no int_times - only int_num is added to spec
-    # It is set to the integration number for all spectra - no integrations in multislit data.
-    assert_equal(mock_10_multi_int_spec.spec[0].spec_table["INT_NUM"], np.arange(1, 11))
-
-
 def test_populate_time_keywords_multislit_table(
     mock_nirspec_mos, mock_nirspec_bots, mock_10_spec, log_watcher
 ):
@@ -428,9 +410,6 @@ def test_get_spectral_order(mock_nirspec_fs_one_slit):
     slit.meta.wcsinfo.spectral_order = None
     assert ex.get_spectral_order(slit) == 1
 
-    slit.meta.wcsinfo = None
-    assert ex.get_spectral_order(slit) == 1
-
     del slit.meta.wcsinfo
     assert ex.get_spectral_order(slit) == 1
 
@@ -457,6 +436,24 @@ def test_is_prism_miri(mock_miri_ifu):
     assert ex.is_prism(mock_miri_ifu) is True
 
 
+def test_ifu_extract_1d(mock_miri_ifu):
+    # set the inputs for the IFU 1D extraction
+    source_type = "UNKNOWN"
+    subtract_background = None
+    bkg_sigma_clip = 3.0
+    step = Extract1dStep()
+    ref_file = step.get_reference_file(mock_miri_ifu, "extract1d")
+    ifu_extraction_inputs = [
+        mock_miri_ifu,
+        ref_file,
+        source_type,
+        subtract_background,
+        bkg_sigma_clip,
+    ]
+    output_model = ifu.ifu_extract1d(*ifu_extraction_inputs)
+    assert output_model.spec[0].position_angle == 150.0
+
+
 def test_copy_keyword_info(mock_nirspec_fs_one_slit, mock_one_spec):
     expected = {
         "slitlet_id": 2,
@@ -476,7 +473,7 @@ def test_copy_keyword_info(mock_nirspec_fs_one_slit, mock_one_spec):
     }
     for key, value in expected.items():
         setattr(mock_nirspec_fs_one_slit, key, value)
-        assert not hasattr(mock_one_spec, key)
+        assert not mock_one_spec.hasattr(key)
 
     ex.copy_keyword_info(mock_nirspec_fs_one_slit, "slit_name", mock_one_spec)
     assert mock_one_spec.name == "slit_name"
@@ -1000,8 +997,8 @@ def test_define_aperture_nirspec(mock_nirspec_fs_one_slit, extract_defaults, is_
     exptype = "NRS_FIXEDSLIT"
     result = ex.define_aperture(model, slit, extract_defaults, exptype)
     ra, dec, wavelength, profile, bg_profile, nod_profile, limits = result
-    assert_allclose(ra, 45.05)
-    assert_allclose(dec, 45.1)
+    assert_allclose(ra, 45.0)
+    assert_allclose(dec, 45.100014)
     assert wavelength.shape == (model.data.shape[1],)
     assert profile.shape == model.data.shape
 
@@ -1024,8 +1021,8 @@ def test_define_aperture_miri(mock_miri_lrs_fs, extract_defaults, is_slit):
     exptype = "MIR_LRS-FIXEDSLIT"
     result = ex.define_aperture(model, slit, extract_defaults, exptype)
     ra, dec, wavelength, profile, bg_profile, nod_profile, limits = result
-    assert_allclose(ra, 45.05)
-    assert_allclose(dec, 45.1)
+    assert_allclose(ra, 45.0)
+    assert_allclose(dec, 45.100014)
     assert wavelength.shape == (model.data.shape[1],)
     assert profile.shape == model.data.shape
 
@@ -1083,10 +1080,7 @@ def test_define_aperture_bad_wcs(monkeypatch, mock_nirspec_fs_one_slit, extract_
     model.wavelength[:] = np.linspace(3, 5, model.data.shape[1])
 
     # mock a bad wcs
-    def return_nan(*args):
-        return np.nan, np.nan, np.nan
-
-    monkeypatch.setattr(model.meta, "wcs", return_nan)
+    model.meta.wcs.pipeline[0].transform |= Scale(np.nan) & Scale(np.nan) & Scale(np.nan)
 
     result = ex.define_aperture(model, slit, extract_defaults, exptype)
     ra, dec = result[:2]
@@ -1158,10 +1152,10 @@ def test_define_aperture_optimal(mock_miri_lrs_fs, extract_defaults, psf_referen
     # profile is normalized along cross-dispersion
     assert_allclose(np.sum(profile, axis=1), 1.0)
 
-    # trace is centered on 1.0, near the edge of the slit,
+    # trace is centered on 24.0, near the center of the slit,
     # and the psf data has the same size as the array (50x50),
-    # so only half the psf is included
-    npix = 26
+    # so most of the psf is included
+    npix = 49
     assert_equal(np.sum(profile != 0, axis=1), npix)
 
     # psf is uniform when in range, 0 otherwise
@@ -1181,11 +1175,15 @@ def test_define_aperture_optimal_with_nod(
     mock_miri_lrs_fs.meta.cal_step.bkg_subtract = "COMPLETE"
     mock_miri_lrs_fs.meta.dither.primary_type = "ALONG-SLIT-NOD"
 
-    # mock a nod position at the opposite end of the array
-    def mock_nod(*args, **kwargs):
+    # mock nod positions at the opposite ends of the array
+    def mock_nod_1(*args, **kwargs):
+        return 1, 7.25, 1.0, np.ones(model.data.shape[0])
+
+    def mock_nod_2(*args, **kwargs):
         return 48.0
 
-    monkeypatch.setattr(pp, "nod_pair_location", mock_nod)
+    monkeypatch.setattr(ex, "location_from_wcs", mock_nod_1)
+    monkeypatch.setattr(pp, "nod_pair_location", mock_nod_2)
 
     # set parameters for optimal extraction
     extract_defaults["extraction_type"] = "optimal"
@@ -1529,6 +1527,7 @@ def test_create_extraction_one_int(create_extraction_inputs, mock_nirspec_bots, 
     ex.create_extraction(*create_extraction_inputs, log_increment=1)
     output_model = create_extraction_inputs[2]
     assert len(output_model.spec) == 1
+    assert output_model.spec[0].position_angle == 150.0
     watcher.assert_seen()
 
 
@@ -1615,11 +1614,15 @@ def test_create_extraction_optimal(monkeypatch, create_extraction_inputs, psf_re
     model.meta.cal_step.bkg_subtract = "COMPLETE"
     model.meta.dither.primary_type = "2-POINT-NOD"
 
-    # mock a nod position at the opposite end of the array
-    def mock_nod(*args, **kwargs):
+    # mock nod positions at the opposite ends of the array
+    def mock_nod_1(*args, **kwargs):
+        return 1, 7.25, 1.0, np.ones(model.data.shape[0])
+
+    def mock_nod_2(*args, **kwargs):
         return 48.0
 
-    monkeypatch.setattr(pp, "nod_pair_location", mock_nod)
+    monkeypatch.setattr(ex, "location_from_wcs", mock_nod_1)
+    monkeypatch.setattr(pp, "nod_pair_location", mock_nod_2)
 
     profile_model, _, _ = ex.create_extraction(
         *create_extraction_inputs,
@@ -1635,7 +1638,6 @@ def test_create_extraction_optimal(monkeypatch, create_extraction_inputs, psf_re
     # profile contains positive and negative nod, summed
     assert np.all(profile_model.data[:10] > 0)
     assert np.all(profile_model.data[-10:] < 0)
-
     profile_model.close()
 
 
@@ -1699,11 +1701,36 @@ def test_run_extract1d_save_cube_scene(mock_nirspec_bots):
 def test_run_extract1d_tso(mock_nirspec_bots):
     model = mock_nirspec_bots
     output_model, _, _, _ = ex.run_extract1d(model)
+    assert isinstance(output_model, dm.TSOMultiSpecModel)
+    assert len(output_model.spec) == 1
+    assert len(output_model.spec[0].spec_table) == 10
 
     # time and integration keywords are populated
     for i, spec in enumerate(output_model.spec[0].spec_table):
         assert spec["int_num"] == i + 1
-        assert_allclose(spec["MJD-BEG"], 59729.04367729)
+        start_time = mock_nirspec_bots.int_times["int_start_MJD_UTC"][i]
+        assert_allclose(spec["MJD-BEG"], start_time)
+
+    output_model.close()
+
+
+def test_run_extract1d_tso_one_int(mock_nirspec_bots):
+    # Modify to keep only the first integration
+    model = mock_nirspec_bots
+    shape = model.data.shape
+    model.data = model.data[0].reshape((1, *shape[1:]))
+
+    output_model, _, _, _ = ex.run_extract1d(model)
+    assert isinstance(output_model, dm.TSOMultiSpecModel)
+    assert len(output_model.spec) == 1
+    assert len(output_model.spec[0].spec_table) == 1
+
+    # time and integration keywords are populated
+    assert output_model.spec[0].spec_table["int_num"] == 1
+    start_time = mock_nirspec_bots.int_times["int_start_MJD_UTC"][0]
+    avg_time = mock_nirspec_bots.int_times["int_mid_MJD_UTC"][0]
+    assert output_model.spec[0].spec_table["MJD-BEG"] == start_time
+    assert output_model.spec[0].spec_table["MJD-AVG"] == avg_time
 
     output_model.close()
 
@@ -1870,3 +1897,13 @@ def test_run_extract1d_continue_error_multislit(monkeypatch, mock_nirspec_mos):
     # no spectra extracted
     assert len(output_model.spec) == 0
     output_model.close()
+
+
+def test_copy_int_times_stripe(mock_niriss_soss_superstripe):
+    # Test that both int_times and int_times_stripe are copied
+    # to an output model if present
+    model = mock_niriss_soss_superstripe
+    output_model = ex._make_output_model(model, model)
+    assert isinstance(output_model, dm.TSOMultiSpecModel)
+    assert len(model.int_times) == len(output_model.int_times)
+    assert len(model.int_times_stripe) == len(output_model.int_times_stripe)

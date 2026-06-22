@@ -21,11 +21,10 @@ def run_detector1(rtdata_module):
 
     rtdata.get_data("niriss/imaging/jw01094001002_02107_00001_nis_uncal.fits")
 
-    # Run detector1 pipeline on an _uncal files
+    # Run detector1 pipeline on an _uncal files, skipping clean_flicker_noise
     args = [
         "calwebb_detector1",
         rtdata.input,
-        "--steps.persistence.save_trapsfilled=False",
         "--steps.dq_init.save_results=True",
         "--steps.saturation.save_results=True",
         "--steps.superbias.save_results=True",
@@ -35,6 +34,7 @@ def run_detector1(rtdata_module):
         "--steps.charge_migration.skip=False",
         "--steps.charge_migration.save_results=True",
         "--steps.jump.save_results=True",
+        "--steps.clean_flicker_noise.skip=True",
         "--steps.ramp_fit.algorithm=OLS_C",
     ]
 
@@ -52,7 +52,6 @@ def run_detector1_multiprocess_rate(rtdata_module):
     args = [
         "calwebb_detector1",
         rtdata.input,
-        "--steps.persistence.save_trapsfilled=False",
         "--steps.dq_init.save_results=True",
         "--steps.saturation.save_results=True",
         "--steps.superbias.save_results=True",
@@ -62,6 +61,7 @@ def run_detector1_multiprocess_rate(rtdata_module):
         "--steps.charge_migration.skip=False",
         "--steps.charge_migration.save_results=True",
         "--steps.jump.save_results=True",
+        "--steps.clean_flicker_noise.skip=True",
         "--steps.ramp_fit.algorithm=OLS_C",
         "--steps.ramp_fit.maximum_cores=2",  # Multiprocessing
     ]
@@ -80,7 +80,6 @@ def run_detector1_multiprocess_rate_save_opt(rtdata_module, resource_tracker):
     args = [
         "calwebb_detector1",
         rtdata.input,
-        "--steps.persistence.save_trapsfilled=False",
         "--steps.dq_init.save_results=True",
         "--steps.saturation.save_results=True",
         "--steps.superbias.save_results=True",
@@ -90,6 +89,7 @@ def run_detector1_multiprocess_rate_save_opt(rtdata_module, resource_tracker):
         "--steps.charge_migration.skip=False",
         "--steps.charge_migration.save_results=True",
         "--steps.jump.save_results=True",
+        "--steps.clean_flicker_noise.skip=True",
         "--steps.ramp_fit.algorithm=OLS_C",
         "--steps.ramp_fit.maximum_cores=2",  # Multiprocessing
         "--steps.ramp_fit.save_opt=True",
@@ -110,7 +110,6 @@ def run_detector1_multiprocess_jump(rtdata_module):
     args = [
         "calwebb_detector1",
         rtdata.input,
-        "--steps.persistence.save_trapsfilled=False",
         "--steps.dq_init.save_results=True",
         "--steps.saturation.save_results=True",
         "--steps.superbias.save_results=True",
@@ -121,6 +120,7 @@ def run_detector1_multiprocess_jump(rtdata_module):
         "--steps.charge_migration.save_results=True",
         "--steps.jump.save_results=True",
         "--steps.jump.maximum_cores=2",  # Multiprocessing
+        "--steps.clean_flicker_noise.skip=True",
         "--steps.ramp_fit.skip=True",
     ]
 
@@ -162,6 +162,7 @@ def run_detector1_with_likelihood_fitting(rtdata_module, resource_tracker):
         rtdata_module.input,
         "--output_file=jw01094001002_02107_00001_nis_likely",
         "--steps.ramp_fit.algorithm=LIKELY",
+        "--steps.clean_flicker_noise.skip=True",
     ]
     with resource_tracker.track():
         Step.from_cmdline(args)
@@ -258,7 +259,7 @@ def test_niriss_tweakreg_no_sources(rtdata, fitsdiff_default_kwargs, log_watcher
     # Check the status of the step is set correctly in the files.
     mc = datamodels.ModelContainer(rtdata.input)
     for model in mc:
-        assert model.meta.cal_step.tweakreg != "SKIPPED"
+        assert model.meta.cal_step.tweakreg is None
 
     watcher = log_watcher(
         "jwst.tweakreg.tweakreg_catalog", message="No sources found in the image", level="warning"
@@ -267,7 +268,7 @@ def test_niriss_tweakreg_no_sources(rtdata, fitsdiff_default_kwargs, log_watcher
     watcher.assert_seen()
     with result:
         for model in result:
-            assert model.meta.cal_step.tweakreg == "SKIPPED"
+            assert model.meta.cal_step.tweakreg == "FAILED"
             result.shelve(model, modify=False)
 
 

@@ -10,9 +10,8 @@ __all__ = [
     "ref_matches_sci",
     "get_subarray_model",
     "get_multistripe_subarray_model",
-    "stripe_read",
-    "generate_stripe_array",
     "science_detector_frame_transform",
+    "detector_science_frame_transform",
     "MatchRowError",
     "find_row",
 ]
@@ -27,7 +26,7 @@ def is_subarray(input_model):
 
     Parameters
     ----------
-    input_model : `jwst.datamodels.JwstDataModel`
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Input data model to be checked.
 
     Returns
@@ -66,10 +65,10 @@ def ref_matches_sci(sci_model, ref_model):
 
     Parameters
     ----------
-    sci_model : `jwst.datamodels.JwstDataModel`
+    sci_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Science data model.
 
-    ref_model : `jwst.datamodels.JwstDataModel`
+    ref_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Reference file data model.
 
     Returns
@@ -78,6 +77,13 @@ def ref_matches_sci(sci_model, ref_model):
         `True` if the science model has the same subarray parameters
         as the reference model, `False` otherwise.
     """
+    # Check first for superstripe data: it should never match the ref model.
+    # Reference files for superstripe ramps are handled directly by
+    # get_multistripe_subarray_model.
+    nstripe = getattr(sci_model.meta.subarray, "num_superstripe", None)
+    if nstripe is not None and nstripe > 0:
+        return False
+
     # Get the reference file subarray parameters
     xstart_ref = ref_model.meta.subarray.xstart
     xsize_ref = ref_model.meta.subarray.xsize
@@ -230,15 +236,15 @@ def get_subarray_model(sci_model, ref_model):
 
     Parameters
     ----------
-    sci_model : `jwst.datamodels.JwstDataModel`
+    sci_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Science data model.
 
-    ref_model : `jwst.datamodels.JwstDataModel`
+    ref_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Reference file data model.
 
     Returns
     -------
-    sub_model : `jwst.datamodels.JwstDataModel`
+    sub_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Subarray version of the reference file model.
     """
     # If science data is in multistripe readout, use
@@ -306,7 +312,10 @@ def get_subarray_model(sci_model, ref_model):
     model_type = ref_model.__class__
     sub_model = model_type()
     primary = ref_model.get_primary_array_name()
-    for attr in {primary, "err", "dq"}:
+    attr_set = {primary, "err", "dq"}
+    if primary == "coeffs":
+        attr_set.add("inv_coeffs")
+    for attr in attr_set:
         if ref_model.hasattr(attr):
             sub_data = getattr(ref_model, attr)[..., ystart:ystop, xstart:xstop]
             setattr(sub_model, attr, sub_data)
@@ -337,209 +346,33 @@ def get_multistripe_subarray_model(sci_model, ref_model):
     sub_model : JWST data model
         Subarray cutout reference file model.
     """
-    if isinstance(ref_model, datamodels.MaskModel):
-        sub_model = stripe_read(sci_model, ref_model, ["dq"])
-    elif isinstance(ref_model, datamodels.GainModel):
-        sub_model = stripe_read(sci_model, ref_model, ["data"])
-    elif isinstance(ref_model, datamodels.LinearityModel):
-        sub_model = stripe_read(sci_model, ref_model, ["coeffs", "dq"])
-    elif isinstance(ref_model, datamodels.ReadnoiseModel):
-        sub_model = stripe_read(sci_model, ref_model, ["data"])
-    elif isinstance(ref_model, datamodels.SaturationModel):
-        sub_model = stripe_read(sci_model, ref_model, ["data", "dq"])
-    elif isinstance(ref_model, datamodels.SuperBiasModel):
-        sub_model = stripe_read(sci_model, ref_model, ["data", "err", "dq"])
-    else:
-        log.warning("Unsupported reference file model type for multistripe subarray cutouts.")
-        sub_model = None
+    # lazy import to avoid circular import error
+    from jwst.lib.stripe_utils import stripe_read
+
+    primary = ref_model.get_primary_array_name()
+    attrs = {primary}
+
+    for att in ["err", "dq"]:
+        if ref_model.hasattr(att):
+            attrs.add(att)
+
+    sub_model = stripe_read(sci_model, ref_model, attrs)
 
     return sub_model
-
-
-def stripe_read(sci_model, ref_model, attribs):
-    """
-    Generate sub-model from science model multistripe params.
-
-    Parameters
-    ----------
-    sci_model, ref_model : DataModel
-        Science and reference models, respectively.
-
-    attribs : list of str
-        Attributes in the model to process.
-
-    Returns
-    -------
-    sub_model : DataModel
-        Generated sub-model.
-    """
-    # Get the science model multistripe params
-    nreads1 = sci_model.meta.subarray.multistripe_reads1
-    nskips1 = sci_model.meta.subarray.multistripe_skips1
-    nreads2 = sci_model.meta.subarray.multistripe_reads2
-    nskips2 = sci_model.meta.subarray.multistripe_skips2
-    repeat_stripe = sci_model.meta.subarray.repeat_stripe
-    interleave_reads1 = sci_model.meta.subarray.interleave_reads1
-    xsize_sci = sci_model.meta.subarray.xsize
-    ysize_sci = sci_model.meta.subarray.ysize
-
-    # Get the reference model subarray params
-    sub_model = type(ref_model)()
-    sub_model.update(ref_model)
-    for attrib in attribs:
-        ref_array = getattr(ref_model, attrib)
-
-        sub_model[attrib] = generate_stripe_array(
-            ref_array,
-            xsize_sci,
-            ysize_sci,
-            nreads1,
-            nreads2,
-            nskips1,
-            nskips2,
-            repeat_stripe,
-            interleave_reads1,
-            sci_model.meta.subarray.fastaxis,
-            sci_model.meta.subarray.slowaxis,
-        )
-    return sub_model
-
-
-def generate_stripe_array(
-    ref_array,
-    xsize_sci,
-    ysize_sci,
-    nreads1,
-    nreads2,
-    nskips1,
-    nskips2,
-    repeat_stripe,
-    interleave_reads1,
-    fastaxis,
-    slowaxis,
-):
-    """
-    Generate stripe array.
-
-    Parameters
-    ----------
-    ref_array : np.array
-        The scene to be sliced.
-    xsize_sci : int
-        Output shape in x dim.
-    ysize_sci : int
-        Output shape in y dim.
-    nreads1 : int
-        Multistripe header keyword.
-    nreads2 : int
-        Multistripe header keyword.
-    nskips1 : int
-        Multistripe header keyword.
-    nskips2 : int
-        Multistripe header keyword.
-    repeat_stripe : int
-        Multistripe header keyword.
-    interleave_reads1 : int
-        Multistripe header keyword.
-    fastaxis : int
-        The subarray keyword describing
-        the fast readout axis and direction.
-    slowaxis : int
-        The subarray keyword describing
-        the slow readout axis and direction.
-
-    Returns
-    -------
-    stripe_out : ndarray
-        Generated stripe array.
-    """
-    # Transform science data to detector frame
-    ref_array = science_detector_frame_transform(ref_array, fastaxis, slowaxis)
-    ref_shape = np.shape(ref_array)
-    stripe_out = np.zeros((*ref_shape[:-2], ysize_sci, xsize_sci), dtype=ref_array.dtype)
-    # Track the read position in the full frame with linecount, and number of lines
-    # read into subarray with sub_lines
-    linecount = 0
-    sub_lines = 0
-
-    # Start at 0, make nreads1 row reads
-    stripe_out[..., sub_lines : sub_lines + nreads1, :] = ref_array[
-        ..., linecount : linecount + nreads1, :
-    ]
-    linecount += nreads1
-    sub_lines += nreads1
-    # Now skip nskips1
-    linecount += nskips1
-    # Nreads2
-    stripe_out[..., sub_lines : sub_lines + nreads2, :] = ref_array[
-        ..., linecount : linecount + nreads2, :
-    ]
-    linecount += nreads2
-    sub_lines += nreads2
-
-    # Now, while the output size is less than the science array size:
-    # 1a. If repeat_stripe, reset linecount (HEAD) to initial position
-    #     after every nreads2.
-    # 1b. Else, do nskips2 followed by nreads2 until subarray complete.
-    # 2.  Following 1a., repeat sequence of nreads1, skips*, nreads2
-    #     until complete. For skips*:
-    # 3a. If interleave_reads1, value of skips increments by nreads2 +
-    #     nskips2 for each stripe read.
-    # 3b. If not interleave, each loop after linecount reset is simply
-    #     nreads1 + nskips1 + nreads2.
-    interleave_skips = nskips1
-    if nreads2 <= 0:
-        raise ValueError(
-            "Invalid value for multistripe_reads2 - "
-            "cutout for reference file could not be "
-            "generated!"
-        )
-    while sub_lines < ysize_sci:
-        # If repeat_stripe, add interleaved rows to output and increment sub_lines
-        if repeat_stripe > 0:
-            linecount = 0
-            stripe_out[..., sub_lines : sub_lines + nreads1, :] = ref_array[
-                ..., linecount : linecount + nreads1, :
-            ]
-            linecount += nreads1
-            sub_lines += nreads1
-            if interleave_reads1:
-                interleave_skips += nskips2 + nreads2
-                linecount += interleave_skips
-            else:
-                linecount += nskips1
-        else:
-            linecount += nskips2
-        stripe_out[..., sub_lines : sub_lines + nreads2, :] = ref_array[
-            ..., linecount : linecount + nreads2, :
-        ]
-        linecount += nreads2
-        sub_lines += nreads2
-
-    if sub_lines != ysize_sci:
-        raise ValueError(
-            "Stripe readout resulted in mismatched reference array shape "
-            "with respect to science array!"
-        )
-
-    # Transform from detector frame back to science frame
-    stripe_out = science_detector_frame_transform(stripe_out, fastaxis, slowaxis)
-
-    return stripe_out
 
 
 def science_detector_frame_transform(data, fastaxis, slowaxis):
     """
-    Swap data array between science and detector frames.
+    Swap data array from science to detector frame.
 
     Use the fastaxis and slowaxis keywords to invert
-    and/or transpose data array axes to move between the
-    science frame and the detector frame.
+    and/or transpose data array axes to move from the
+    science frame to the detector frame.
 
     Parameters
     ----------
     data : np.array
-        Science array containing at least two dimensions.
+        Data array containing at least two dimensions in science orientation.
     fastaxis : int
         Value of the fastaxis keyword for the data array
         to be transformed.
@@ -550,17 +383,51 @@ def science_detector_frame_transform(data, fastaxis, slowaxis):
     Returns
     -------
     np.array
-        Data array transformed between science and
-        detector frames.
+        Data array transformed to detector orientation.
     """
     # If fastaxis is x-axis
     if np.abs(fastaxis) == 1:
         # Use sign of keywords to possibly reverse the ordering of the axes.
-        data = data[..., :: slowaxis // np.abs(slowaxis), :: fastaxis // np.abs(fastaxis)]
+        data = data[..., :: np.sign(slowaxis), :: np.sign(fastaxis)]
     # Else fastaxis is y-axis, also need to transpose array
     else:
-        data = data[..., :: fastaxis // np.abs(fastaxis), :: slowaxis // np.abs(slowaxis)]
+        data = data[..., :: np.sign(fastaxis), :: np.sign(slowaxis)]
         data = np.swapaxes(data, -2, -1)
+    return data
+
+
+def detector_science_frame_transform(data, fastaxis, slowaxis):
+    """
+    Swap data array from detector to science frame.
+
+    Use the fastaxis and slowaxis keywords to invert
+    and/or transpose data array axes to move from the
+    detector frame to the science frame.
+
+    Parameters
+    ----------
+    data : np.array
+        Data array containing at least two dimensions in detector orientation.
+    fastaxis : int
+        Value of the fastaxis keyword for the data array
+        to be transformed.
+    slowaxis : int
+        Value of the slowaxis keyword for the data array
+        to be transformed.
+
+    Returns
+    -------
+    np.array
+        Data array transformed to science orientation.
+    """
+    # If fastaxis is x-axis
+    if np.abs(fastaxis) == 1:
+        # Use sign of keywords to possibly reverse the ordering of the axes.
+        data = data[..., :: np.sign(slowaxis), :: np.sign(fastaxis)]
+    # Else fastaxis is y-axis, also need to transpose array
+    else:
+        data = np.swapaxes(data, -2, -1)
+        data = data[..., :: np.sign(fastaxis), :: np.sign(slowaxis)]
     return data
 
 

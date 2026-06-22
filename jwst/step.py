@@ -1,5 +1,5 @@
+from jwst.adaptive_trace_model.adaptive_trace_model_step import AdaptiveTraceModelStep
 from jwst.ami.ami_analyze_step import AmiAnalyzeStep
-from jwst.ami.ami_average_step import AmiAverageStep
 from jwst.ami.ami_normalize_step import AmiNormalizeStep
 from jwst.assign_mtwcs.assign_mtwcs_step import AssignMTWcsStep
 from jwst.assign_wcs.assign_wcs_step import AssignWcsStep
@@ -32,13 +32,12 @@ from jwst.lastframe.lastframe_step import LastFrameStep
 from jwst.linearity.linearity_step import LinearityStep
 from jwst.master_background.master_background_mos_step import MasterBackgroundMosStep
 from jwst.master_background.master_background_step import MasterBackgroundStep
-from jwst.mrs_imatch.mrs_imatch_step import MRSIMatchStep
 from jwst.msaflagopen.msaflagopen_step import MSAFlagOpenStep
-from jwst.nsclean.nsclean_step import NSCleanStep
 from jwst.outlier_detection.outlier_detection_step import OutlierDetectionStep
 from jwst.pathloss.pathloss_step import PathLossStep
 from jwst.persistence.persistence_step import PersistenceStep
 from jwst.photom.photom_step import PhotomStep
+from jwst.picture_frame.picture_frame_step import PictureFrameStep
 from jwst.pixel_replace.pixel_replace_step import PixelReplaceStep
 from jwst.ramp_fitting.ramp_fit_step import RampFitStep
 from jwst.refpix.refpix_step import RefPixStep
@@ -54,6 +53,7 @@ from jwst.spectral_leak.spectral_leak_step import SpectralLeakStep
 from jwst.srctype.srctype_step import SourceTypeStep
 from jwst.straylight.straylight_step import StraylightStep
 from jwst.superbias.superbias_step import SuperBiasStep
+from jwst.targ_centroid.targ_centroid_step import TargCentroidStep
 from jwst.tso_photometry.tso_photometry_step import TSOPhotometryStep
 from jwst.tweakreg.tweakreg_step import TweakRegStep
 from jwst.wavecorr.wavecorr_step import WavecorrStep
@@ -62,8 +62,8 @@ from jwst.wfss_contam.wfss_contam_step import WfssContamStep
 from jwst.white_light.white_light_step import WhiteLightStep
 
 __all__ = [
+    "AdaptiveTraceModelStep",
     "AmiAnalyzeStep",
-    "AmiAverageStep",
     "AmiNormalizeStep",
     "AssignMTWcsStep",
     "AssignWcsStep",
@@ -95,13 +95,12 @@ __all__ = [
     "LinearityStep",
     "MasterBackgroundStep",
     "MasterBackgroundMosStep",
-    "MRSIMatchStep",
     "MSAFlagOpenStep",
-    "NSCleanStep",
     "OutlierDetectionStep",
     "PathLossStep",
     "PersistenceStep",
     "PhotomStep",
+    "PictureFrameStep",
     "PixelReplaceStep",
     "RampFitStep",
     "RefPixStep",
@@ -117,6 +116,7 @@ __all__ = [
     "SpectralLeakStep",
     "StraylightStep",
     "SuperBiasStep",
+    "TargCentroidStep",
     "TSOPhotometryStep",
     "ChargeMigrationStep",
     "TweakRegStep",

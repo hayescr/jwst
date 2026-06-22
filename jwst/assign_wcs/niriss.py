@@ -38,7 +38,7 @@ def create_pipeline(input_model, reference_files):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -46,7 +46,7 @@ def create_pipeline(input_model, reference_files):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     log.debug(f"reference files used in NIRISS WCS pipeline: {reference_files}")
     exp_type = input_model.meta.exposure.type.lower()
@@ -61,14 +61,14 @@ def niriss_soss_set_input(model, order_number):
 
     Parameters
     ----------
-    model : `~jwst.datamodels.ImageModel`
+    model : `~stdatamodels.jwst.datamodels.ImageModel`
         An instance of an ImageModel
     order_number : int
         The spectral order
 
     Returns
     -------
-    gwcs.WCS
+    `gwcs.wcs.WCS`
         The WCS corresponding to the spectral order.
     """
     # Make sure the spectral order is available.
@@ -118,12 +118,12 @@ def niriss_bounding_box(input_model):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input datamodel.
 
     Returns
     -------
-    CompoundBoundingBox
+    `~astropy.modeling.bounding_box.CompoundBoundingBox`
         The bounding box for the NIRISS model.
     """
     bbox = {(order,): _niriss_order_bounding_box(input_model, order) for order in [1, 2, 3]}
@@ -141,7 +141,9 @@ def niriss_soss(input_model, reference_files):
 
     Parameters
     ----------
-    input_model : ImageModel, IFUImageModel, or CubeModel
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel`, \
+                  `~stdatamodels.jwst.datamodels.IFUImageModel`, or \
+                  `~stdatamodels.jwst.datamodels.CubeModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -150,7 +152,7 @@ def niriss_soss(input_model, reference_files):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     # Get the target RA and DEC, they will be used for setting the WCS RA
     # and DEC based on a conversation with Kevin Volk.
@@ -194,7 +196,7 @@ def niriss_soss(input_model, reference_files):
         velocity_corr = velocity_correction(velosys)
         wl1 = wl1 | velocity_corr
         wl2 = wl2 | velocity_corr
-        wl2 = wl3 | velocity_corr
+        wl3 = wl3 | velocity_corr
         log.info(f"Applied Barycentric velocity correction: {velocity_corr[1].amplitude.value}")
 
     # Reverse the order of inputs passed to Tabular because it's in python order in modeling.
@@ -240,11 +242,11 @@ def imaging(input_model, reference_files):
     """
     Create the WCS pipeline for NIRISS imaging data.
 
-    It includes three coordinate frames - "detector" "v2v3" and "world".
+    It includes three coordinate frames - "detector", "v2v3", and "world".
 
     Parameters
     ----------
-    input_model : ImageModel
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -253,7 +255,7 @@ def imaging(input_model, reference_files):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
     """
     detector = cf.Frame2D(name="detector", axes_order=(0, 1), unit=(u.pix, u.pix))
     v2v3 = cf.Frame2D(
@@ -292,7 +294,7 @@ def imaging_distortion(input_model, reference_files):
 
     Parameters
     ----------
-    input_model : ImageModel
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -351,7 +353,7 @@ def wfss(input_model, reference_files):
 
     Parameters
     ----------
-    input_model : ImageModel
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel`
         The input data model.
     reference_files : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -360,15 +362,14 @@ def wfss(input_model, reference_files):
     Returns
     -------
     pipeline : list
-        The WCS pipeline, suitable for input into `gwcs.WCS`.
+        The WCS pipeline, suitable for input into `gwcs.wcs.WCS`.
 
     Notes
     -----
     The tree in the grism reference file has a section for each order/beam as
     well as the link to the filter data file, not sure if there will be a
     separate passband reference file needed for the wavelength scaling or the
-    wedge offsets. This file is currently created in
-    jwreftools/niriss/niriss_reftools.
+    wedge offsets.
 
     The direct image the catalog has been created from was corrected for
     distortion, but the dispersed images have not. This is OK if the trace and
@@ -426,11 +427,11 @@ def wfss(input_model, reference_files):
     # Get the disperser parameters which are defined as a model for each
     # spectral order
     with NIRISSGrismModel(reference_files["specwcs"]) as f:
-        dispx = f.dispx
-        dispy = f.dispy
-        displ = f.displ
-        invdispl = f.invdispl
-        orders = f.orders
+        dispx = f.dispx.instance
+        dispy = f.dispy.instance
+        displ = f.displ.instance
+        invdispl = f.invdispl.instance
+        orders = f.orders.instance
         fwcpos_ref = f.fwcpos_ref
 
     # This is the actual rotation from the input model

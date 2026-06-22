@@ -74,6 +74,7 @@ def create_model_2d():
 @pytest.fixture
 def create_model_3d():
     im = CubeModel()
+    im.data = zeros((5, 10, 10))
     im.meta.wcsinfo.crpix1 = 2.5
     im.meta.wcsinfo.crpix2 = 3
     im.meta.wcsinfo.crval1 = 5.6
@@ -188,7 +189,7 @@ def test_create_fitswcs(tmp_path, create_model_3d):
     wcel = w.sub(["celestial"])
     ra, dec = wcel.all_pix2world(1, 1, 0)
 
-    # Check that astropy.wcs.WCS and gwcs.WCS give same result
+    # Check that astropy.wcs.WCS and gwcs.wcs.WCS give same result
     assert_allclose((ra, dec), (gra, gdec))
 
 

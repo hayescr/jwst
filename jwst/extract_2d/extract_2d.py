@@ -12,13 +12,16 @@ log = logging.getLogger(__name__)
 
 __all__ = ["extract2d"]
 
-slitless_modes = ["NIS_WFSS", "NRC_WFSS", "NRC_TSGRISM"]
+slitless_modes = ["NIS_WFSS", "NRC_WFSS", "NRC_TSGRISM", "MIR_WFSS"]
 
 
 def extract2d(
     input_model,
     slit_names=None,
     source_ids=None,
+    source_ra=None,
+    source_dec=None,
+    max_sep=None,
     reference_files=None,
     grism_objects=None,
     tsgrism_extract_height=None,
@@ -33,11 +36,21 @@ def extract2d(
     Parameters
     ----------
     input_model : `~jwst.datamodels.ImageModel` or `~jwst.datamodels.CubeModel`
-        Input data model.
+        Input data model. May be updated in place with a "SKIPPED" status,
+        if a new model cannot be created.
     slit_names : list containing strings or ints
         Slit names to be processed.
     source_ids : list containing strings or ints
         Source ids to be processed.
+    source_ra : list[float]
+        Source right ascensions to be processed (has effect for WFSS modes only)
+    source_dec : list[float]
+        Source declinations to be processed (has effect for WFSS modes only)
+    max_sep : float
+        Radius in arcseconds within which source_ra and source_dec will be matched
+        to sources in the catalog. If no source is found within this radius, a warning
+        will be emitted and no source will be extracted corresponding to that ra, dec pair.
+        Has effect for WFSS modes only.
     reference_files : dict
         Reference files.
     grism_objects : list
@@ -58,8 +71,9 @@ def extract2d(
 
     Returns
     -------
-    output_model : `~jwst.datamodels.ImageModel` or `~jwst.datamodelsCubeModel`
-      A copy of the input_model that has been processed.
+    output_model : `~stdatamodels.jwst.datamodels.MultiSlitModel` or
+                   `~stdatamodels.jwst.datamodels.SlitModel`
+        Datamodel containing spectral cutouts.
     """
     nrs_modes = [
         "NRS_FIXEDSLIT",
@@ -72,9 +86,6 @@ def extract2d(
 
     exp_type = input_model.meta.exposure.type.upper()
     log.info(f"EXP_TYPE is {exp_type}")
-
-    if reference_files is None:
-        reference_files = {}
 
     if exp_type in nrs_modes:
         if input_model.meta.instrument.grating.lower() == "mirror":
@@ -99,17 +110,21 @@ def extract2d(
                 grism_objects=grism_objects,
                 reference_files=reference_files,
                 extract_orders=extract_orders,
+                source_ids=source_ids,
+                source_ra=source_ra,
+                source_dec=source_dec,
+                max_sep=max_sep,
                 mmag_extract=mmag_extract,
                 wfss_extract_half_height=wfss_extract_half_height,
                 nbright=nbright,
             )
-
     else:
         log.info(f"EXP_TYPE {exp_type} not supported for extract 2D")
         input_model.meta.cal_step.extract_2d = "SKIPPED"
         return input_model
 
     # Set the step status to COMPLETE
-    output_model.meta.cal_step.extract_2d = "COMPLETE"
-    del input_model
+    if output_model.meta.cal_step.extract_2d != "SKIPPED":
+        output_model.meta.cal_step.extract_2d = "COMPLETE"
+
     return output_model

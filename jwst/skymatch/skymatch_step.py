@@ -2,7 +2,7 @@
 """
 JWST pipeline step for sky matching.
 
-:Authors: Mihai Cara
+Provide support for sky background subtraction and equalization (matching).
 """
 
 import logging
@@ -28,7 +28,7 @@ __all__ = ["SkyMatchStep"]
 
 
 class SkyMatchStep(Step):
-    """SkyMatchStep: Subtraction or equalization of sky background in science images."""
+    """Subtract or equalize sky background in science images."""
 
     class_alias = "skymatch"
 
@@ -67,18 +67,25 @@ class SkyMatchStep(Step):
 
         Parameters
         ----------
-        input_models : Any data type readable into a ModelLibrary, e.g. an asn file
+        input_models : str or Path or list (of DataModels)
             An association of datamodels to input.
+            This can be any data type readable into a
+            `~jwst.datamodels.library.ModelLibrary`, e.g., an ASN file.
 
         Returns
         -------
-        ModelLibrary
+        `~jwst.datamodels.library.ModelLibrary`
             A library of datamodels with the skymatch step applied.
         """
-        if isinstance(input_models, ModelLibrary):
-            library = input_models
+        # Check the input for open models and make a copy if necessary
+        # to avoid modifying input data.
+        # If there are no open models already, do not open them.  Leave
+        # that to the ModelLibrary call below.
+        output_models = self.prepare_output(input_models, open_models=False)
+        if isinstance(output_models, ModelLibrary):
+            library = output_models
         else:
-            library = ModelLibrary(input_models, on_disk=not self.in_memory)
+            library = ModelLibrary(output_models, on_disk=not self.in_memory)
 
         # Method: "user". Use user-provided sky values, and bypass skymatch() altogether.
         if self.skymethod == "user":
@@ -134,11 +141,11 @@ class SkyMatchStep(Step):
 
     def _imodel2skyim(self, image_model, index):
         if self._dqbits is None:
-            dqmask = np.isfinite(image_model.data).astype(dtype=np.uint8)
+            dqmask = np.isfinite(image_model.data)
         else:
             dqmask = bitfield_to_boolean_mask(
-                image_model.dq, self._dqbits, good_mask_value=1, dtype=np.uint8
-            ) * np.isfinite(image_model.data)
+                image_model.dq, self._dqbits, good_mask_value=True, dtype="bool"
+            ) & np.isfinite(image_model.data)
 
         # see if 'skymatch' was previously run and raise an exception
         # if 'subtract' mode has changed compared to the previous pass:
@@ -178,13 +185,10 @@ class SkyMatchStep(Step):
             image=image_model.data,
             wcs_fwd=wcs.__call__,
             wcs_inv=wcs.invert,
-            pix_area=1.0,  # TODO: pixel area
-            convf=1.0,  # TODO: conv. factor to brightness
             mask=dqmask,
             sky_id=image_model.meta.filename,
             skystat=self._skystat,
             stepsize=self.stepsize,
-            reduce_memory_usage=False,  # this overwrote input files
             meta={"index": index},
         )
 
@@ -229,12 +233,12 @@ class SkyMatchStep(Step):
 
         Parameters
         ----------
-        library : ModelLibrary
+        library : `~jwst.datamodels.library.ModelLibrary`
             Library of input data models.
 
         Returns
         -------
-        ModelLibrary
+        `~jwst.datamodels.library.ModelLibrary`
             Library of input data models with sky background values set to user-provided values.
         """
         if self.skylist is None:

@@ -3,6 +3,9 @@
 import logging
 
 from jwst.associations.lib.dms_base import (
+    Constraint_NotBkgd,
+    Constraint_NotBkgdOrTSO,
+    Constraint_NotTSO,
     Constraint_TargetAcq,
     Constraint_TSO,
     nissoss_calibrated_filter,
@@ -58,6 +61,7 @@ __all__ = [
     "Asn_Lv3WFSCMB",
     "Asn_Lv3WFSSNIS",
     "Asn_Lv3WFSSNRC",
+    "Asn_Lv3WFSSMIR",
 ]
 
 # Configure logging
@@ -73,6 +77,7 @@ class Asn_Lv3ACQ_Reprocess(DMS_Level3_Base):
     Level 3 Gather Target Acquisitions.
 
     Characteristics:
+
         - Association type: Not applicable
         - Pipeline: Not applicable
         - Used to populate other related associations
@@ -107,6 +112,7 @@ class Asn_Lv3AMI(AsnMixin_Science):
     Level 3 Aperture Mask Interferometry Association.
 
     Characteristics:
+
         - Association type: ``ami3``
         - Pipeline: ``calwebb_ami3``
         - Gather science and related PSF exposures
@@ -160,6 +166,7 @@ class Asn_Lv3Image(AsnMixin_Science):
     Level 3 Science Image Association.
 
     Characteristics:
+
         - Association type: ``image3``
         - Pipeline: ``calwebb_image3``
         - Non-TSO
@@ -167,7 +174,6 @@ class Asn_Lv3Image(AsnMixin_Science):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup constraints
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -176,16 +182,7 @@ class Asn_Lv3Image(AsnMixin_Science):
                 DMSAttrConstraint(
                     name="wfsvisit", sources=["visitype"], value="((?!wfsc).)*", required=False
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="bkgdtarg",
-                            sources=["bkgdtarg"],
-                        ),
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotBkgdOrTSO(),
             ]
         )
 
@@ -204,6 +201,7 @@ class Asn_Lv3ImageBackground(AsnMixin_AuxData, AsnMixin_Science):
     Level 3 Background Image Association.
 
     Characteristics:
+
         - Association type: ``image3``
         - Pipeline: ``calwebb_image3``
         - Non-TSO
@@ -211,7 +209,6 @@ class Asn_Lv3ImageBackground(AsnMixin_AuxData, AsnMixin_Science):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup constraints
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -224,7 +221,7 @@ class Asn_Lv3ImageBackground(AsnMixin_AuxData, AsnMixin_Science):
                     name="bkgdtarg",
                     sources=["bkgdtarg"],
                 ),
-                Constraint([Constraint_TSO()], reduce=Constraint.notany),
+                Constraint_NotTSO(),
             ]
         )
 
@@ -243,6 +240,7 @@ class Asn_Lv3MIRCoron(AsnMixin_Coronagraphy, AsnMixin_Science):
     Level 3 Coronagraphy Association.
 
     Characteristics:
+
         - Association type: ``coron3``
         - Pipeline: ``calwebb_coron3``
         - MIRI Coronagraphy
@@ -259,7 +257,6 @@ class Asn_Lv3MIRCoron(AsnMixin_Coronagraphy, AsnMixin_Science):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -275,16 +272,7 @@ class Asn_Lv3MIRCoron(AsnMixin_Coronagraphy, AsnMixin_Science):
                     force_reprocess=ListCategory.EXISTING,
                     only_on_match=True,
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="bkgdtarg",
-                            sources=["bkgdtarg"],
-                            force_unique=False,
-                        )
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotBkgd(),
             ],
             name="asn_coron",
         )
@@ -299,6 +287,7 @@ class Asn_Lv3MIRMRS(AsnMixin_Spectrum):
     Level 3 MIRI MRS Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Just MIRI MRS
@@ -308,7 +297,6 @@ class Asn_Lv3MIRMRS(AsnMixin_Spectrum):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Target(association=self),
@@ -317,12 +305,7 @@ class Asn_Lv3MIRMRS(AsnMixin_Spectrum):
                     sources=["exp_type"],
                     value="mir_mrs",
                 ),
-                Constraint(
-                    [
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotTSO(),
             ]
         )
 
@@ -348,6 +331,7 @@ class Asn_Lv3MIRMRSBackground(AsnMixin_AuxData, AsnMixin_Spectrum):
     Level 3 MIRI MRS Association Auxiliary data.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Just MIRI MRS
@@ -357,7 +341,6 @@ class Asn_Lv3MIRMRSBackground(AsnMixin_AuxData, AsnMixin_Spectrum):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Target(),
@@ -366,12 +349,7 @@ class Asn_Lv3MIRMRSBackground(AsnMixin_AuxData, AsnMixin_Spectrum):
                     sources=["exp_type"],
                     value="mir_mrs",
                 ),
-                Constraint(
-                    [
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotTSO(),
                 DMSAttrConstraint(
                     name="bkgdtarg",
                     sources=["bkgdtarg"],
@@ -402,6 +380,7 @@ class Asn_Lv3NRCCoron(AsnMixin_Coronagraphy, AsnMixin_Science):
     Level 3 Coronagraphy Association.
 
     Characteristics:
+
         - Association type: ``coron3``
         - Pipeline: ``calwebb_coron3``
         - Gather science and related PSF exposures
@@ -418,7 +397,6 @@ class Asn_Lv3NRCCoron(AsnMixin_Coronagraphy, AsnMixin_Science):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -434,16 +412,7 @@ class Asn_Lv3NRCCoron(AsnMixin_Coronagraphy, AsnMixin_Science):
                     force_reprocess=ListCategory.EXISTING,
                     only_on_match=True,
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="bkgdtarg",
-                            sources=["bkgdtarg"],
-                            force_unique=False,
-                        )
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotBkgd(),
                 SimpleConstraint(
                     value=True,
                     test=lambda _value, item: nrccoron_valid_detector(item),
@@ -463,6 +432,7 @@ class Asn_Lv3NRCCoronImage(AsnMixin_Science):
     Level 3 Coronagraphy Association handled as regular imaging.
 
     Characteristics:
+
         - Association type: ``image3``
         - Pipeline: ``calwebb_image3``
         - Gather science exposures only, no psf exposures
@@ -470,7 +440,19 @@ class Asn_Lv3NRCCoronImage(AsnMixin_Science):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
+        # Exclude background targets and PSF exposures; this rule handles science images only.
+        not_bkgd_or_psf = Constraint(
+            [
+                DMSAttrConstraint(
+                    name="bkgdtarg",
+                    sources=["bkgdtarg"],
+                    force_unique=False,
+                ),
+                DMSAttrConstraint(name="is_psf", sources=["is_psf"], value=("T")),
+            ],
+            reduce=Constraint.notany,
+        )
+
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -486,17 +468,7 @@ class Asn_Lv3NRCCoronImage(AsnMixin_Science):
                     force_reprocess=ListCategory.EXISTING,
                     only_on_match=True,
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="bkgdtarg",
-                            sources=["bkgdtarg"],
-                            force_unique=False,
-                        ),
-                        DMSAttrConstraint(name="is_psf", sources=["is_psf"], value=("T")),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                not_bkgd_or_psf,
                 DMSAttrConstraint(
                     name="channel",
                     sources=["channel"],
@@ -559,6 +531,7 @@ class Asn_Lv3NRSFSS(AsnMixin_Spectrum):
     Level 3 NIRSpec Fixed-slit Science.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - NIRSpec Fixed-slit Science
@@ -566,10 +539,9 @@ class Asn_Lv3NRSFSS(AsnMixin_Spectrum):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
-                Constraint([Constraint_TSO()], reduce=Constraint.notany),
+                Constraint_NotTSO(),
                 DMSAttrConstraint(
                     name="exp_type",
                     sources=["exp_type"],
@@ -608,13 +580,13 @@ class Asn_Lv3NRSIFU(AsnMixin_Spectrum):
     Level 3 IFU gratings Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - optical path determined by calibration
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Target(association=self),
@@ -630,12 +602,7 @@ class Asn_Lv3NRSIFU(AsnMixin_Spectrum):
                     force_unique=False,
                 ),
                 DMSAttrConstraint(name="patttype", sources=["patttype"], required=True),
-                Constraint(
-                    [
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotTSO(),
                 DMSAttrConstraint(
                     name="opt_elem",
                     sources=["grating"],
@@ -653,21 +620,16 @@ class Asn_Lv3NRSIFUBackground(AsnMixin_AuxData, AsnMixin_Spectrum):
     Level 3 Spectral Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Target(association=self),
-                Constraint(
-                    [
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotTSO(),
                 DMSAttrConstraint(
                     name="bkgdtarg",
                     sources=["bkgdtarg"],
@@ -701,6 +663,7 @@ class Asn_Lv3SlitlessSpectral(AsnMixin_Spectrum):
     Level 3 slitless, target-based or single-object spectrographic Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Single target
@@ -708,36 +671,40 @@ class Asn_Lv3SlitlessSpectral(AsnMixin_Spectrum):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
+        # Exclude nod-pattern observations; those are handled by Asn_Lv3SpectralTarget.
+        not_nod_pattern = Constraint(
+            [
+                DMSAttrConstraint(
+                    name="patttype_spectarg",
+                    sources=["patttype"],
+                ),
+            ],
+            reduce=Constraint.notany,
+        )
+
+        # Exclude MIRI LRS slitless TSO observations from level 3 processing.
+        not_mir_lrs_slitless_tso = Constraint(
+            [
+                DMSAttrConstraint(
+                    name="restricted_slitless",
+                    sources=["exp_type"],
+                    value=("mir_lrs-slitless"),
+                ),
+                Constraint_TSO(),
+            ],
+            reduce=Constraint.notany,
+        )
+
         self.constraints = Constraint(
             [
-                Constraint([Constraint_TSO()], reduce=Constraint.notany),
+                Constraint_NotTSO(),
                 Constraint_Optical_Path(),
                 Constraint_Target(association=self),
                 DMSAttrConstraint(
                     name="exp_type", sources=["exp_type"], value=("nis_soss"), force_unique=False
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="patttype_spectarg",
-                            sources=["patttype"],
-                        ),
-                    ],
-                    reduce=Constraint.notany,
-                ),
-                # Constraint to prevent calibration data from level 3 processing
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="restricted_slitless",
-                            sources=["exp_type"],
-                            value=("mir_lrs-slitless"),
-                        ),
-                        DMSAttrConstraint(name="tso_obs", sources=["tso_visit"], value=("T")),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                not_nod_pattern,
+                not_mir_lrs_slitless_tso,
             ]
         )
 
@@ -751,21 +718,16 @@ class Asn_Lv3SpecAux(AsnMixin_AuxData, AsnMixin_Spectrum):
     Level 3 Spectral Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
         self.constraints = Constraint(
             [
                 Constraint_Target(association=self),
-                Constraint(
-                    [
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotTSO(),
                 DMSAttrConstraint(
                     name="bkgdtarg",
                     sources=["bkgdtarg"],
@@ -790,6 +752,7 @@ class Asn_Lv3SpectralSource(AsnMixin_Spectrum):
     Level 3 slit-like, multi-object spectrographic Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Multi-object
@@ -797,24 +760,26 @@ class Asn_Lv3SpectralSource(AsnMixin_Spectrum):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
+        # NIRSpec MSA science or calibration (autoflat/autowave) exposures.
+        msa_or_calib = Constraint(
+            [
+                DMSAttrConstraint(
+                    name="exp_type",
+                    sources=["exp_type"],
+                    value=("nrs_autoflat|nrs_autowave"),
+                    force_unique=False,
+                ),
+                Constraint_MSA(),
+            ],
+            reduce=Constraint.any,
+        )
+
         self.constraints = Constraint(
             [
-                Constraint([Constraint_TSO()], reduce=Constraint.notany),
+                Constraint_NotTSO(),
                 Constraint_Optical_Path(),
                 Constraint_Target(association=self),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="exp_type",
-                            sources=["exp_type"],
-                            value=("nrs_autoflat|nrs_autowave"),
-                            force_unique=False,
-                        ),
-                        Constraint_MSA(),
-                    ],
-                    reduce=Constraint.any,
-                ),
+                msa_or_calib,
             ]
         )
 
@@ -829,7 +794,7 @@ class Asn_Lv3SpectralSource(AsnMixin_Spectrum):
         Returns
         -------
         str
-            The product name using source id.
+            The product name using source ID.
         """
         return dms_product_name_sources(self)
 
@@ -840,6 +805,7 @@ class Asn_Lv3SpectralTarget(AsnMixin_Spectrum):
     Level 3 slit-like, target-based or single-object spectrographic Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Single target
@@ -847,10 +813,21 @@ class Asn_Lv3SpectralTarget(AsnMixin_Spectrum):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
+        # Require a nod-pattern observation (2-point, 4-point, or along-slit).
+        nod_pattern = Constraint(
+            [
+                DMSAttrConstraint(
+                    name="patttype_spectarg",
+                    sources=["patttype"],
+                    value="2-point-nod|4-point-nod|along-slit-nod",
+                ),
+            ],
+            reduce=Constraint.any,
+        )
+
         self.constraints = Constraint(
             [
-                Constraint([Constraint_TSO()], reduce=Constraint.notany),
+                Constraint_NotTSO(),
                 Constraint_Optical_Path(),
                 Constraint_Target(association=self),
                 DMSAttrConstraint(
@@ -859,16 +836,7 @@ class Asn_Lv3SpectralTarget(AsnMixin_Spectrum):
                     value=("mir_lrs-fixedslit|nis_soss"),
                     force_unique=False,
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="patttype_spectarg",
-                            sources=["patttype"],
-                            value="2-point-nod|4-point-nod|along-slit-nod",
-                        ),
-                    ],
-                    reduce=Constraint.any,
-                ),
+                nod_pattern,
             ]
         )
 
@@ -901,12 +869,92 @@ class Asn_Lv3TSO(AsnMixin_Science):
     Level 3 Time-Series Association.
 
     Characteristics:
+
         - Association type: ``tso3``
         - Pipeline: ``calwebb_tso3``
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup for checking.
+        # Exclude IFU exposures; IFU data is not processed through TSO3.
+        not_ifu = Constraint([Constraint_IFU()], reduce=Constraint.notany)
+
+        # Exclude NIRCam TSO grism engineering modes: CLEAR pupil or module B long detector.
+        # Also excludes DHS exposures through subarray and pupil constraints.
+        not_nrc_tsgrism_invalid = Constraint(
+            [
+                Constraint(
+                    [
+                        DMSAttrConstraint(
+                            name="restricted_grism",
+                            sources=["exp_type"],
+                            value="nrc_tsgrism",
+                        ),
+                        DMSAttrConstraint(
+                            name="grism_clear",
+                            sources=["pupil"],
+                            value="clear|gdhs0|gdhs60",
+                        ),
+                    ]
+                ),
+                Constraint(
+                    [
+                        DMSAttrConstraint(
+                            name="restricted_ts", sources=["exp_type"], value="nrc_tsgrism"
+                        ),
+                        DMSAttrConstraint(name="module", sources=["detector"], value="nrcblong"),
+                    ]
+                ),
+                DMSAttrConstraint(
+                    name="subarray",
+                    sources=["subarray"],
+                    value="sub260stripe4_dhs|sub41stripe1_dhs|sub82stripe2_dhs|sub164stripe4_dhs",
+                ),
+            ],
+            reduce=Constraint.notany,
+        )
+
+        # Exclude NIRISS SOSS with a single integration or an uncalibrated filter.
+        not_nis_soss_invalid = Constraint(
+            [
+                Constraint(
+                    [
+                        DMSAttrConstraint(name="exp_type", sources=["exp_type"], value="nis_soss"),
+                        DMSAttrConstraint(name="nints", sources=["nints"], value="1"),
+                    ]
+                ),
+                Constraint(
+                    [
+                        DMSAttrConstraint(name="exp_type", sources=["exp_type"], value="nis_soss"),
+                        SimpleConstraint(
+                            value=False,
+                            test=lambda value, item: nissoss_calibrated_filter(item) == value,
+                            force_unique=False,
+                        ),
+                    ]
+                ),
+            ],
+            reduce=Constraint.notany,
+        )
+
+        # Exclude NIRSpec brightobj exposures on an invalid detector optical path.
+        not_nrs_brightobj_invalid = Constraint(
+            [
+                Constraint(
+                    [
+                        DMSAttrConstraint(
+                            name="exp_type", sources=["exp_type"], value="nrs_brightobj"
+                        ),
+                        SimpleConstraint(
+                            value=False,
+                            test=lambda value, item: nrsfss_valid_detector(item) == value,
+                            force_unique=False,
+                        ),
+                    ]
+                ),
+            ],
+            reduce=Constraint.notany,
+        )
+
         self.constraints = Constraint(
             [
                 Constraint_Target(association=self),
@@ -916,89 +964,10 @@ class Asn_Lv3TSO(AsnMixin_Science):
                     name="exp_type",
                     sources=["exp_type"],
                 ),
-                # Don't allow IFU exposures in tso3
-                Constraint(
-                    [
-                        Constraint_IFU(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
-                # Don't allow NIRCam engineering mode
-                # with PUPIL='CLEAR' in tso3
-                Constraint(
-                    [
-                        Constraint(
-                            [
-                                DMSAttrConstraint(
-                                    name="restricted_grism",
-                                    sources=["exp_type"],
-                                    value="nrc_tsgrism",
-                                ),
-                                DMSAttrConstraint(
-                                    name="grism_clear",
-                                    sources=["pupil"],
-                                    value="clear|gdhs0|gdhs60",
-                                ),
-                            ]
-                        ),
-                        Constraint(
-                            [
-                                DMSAttrConstraint(
-                                    name="restricted_ts", sources=["exp_type"], value="nrc_tsgrism"
-                                ),
-                                DMSAttrConstraint(
-                                    name="module", sources=["detector"], value="nrcblong"
-                                ),
-                            ]
-                        ),
-                    ],
-                    reduce=Constraint.notany,
-                ),
-                # Don't allow NIRISS SOSS with NINTS=1 or uncalibrated filters
-                Constraint(
-                    [
-                        Constraint(
-                            [
-                                DMSAttrConstraint(
-                                    name="exp_type", sources=["exp_type"], value="nis_soss"
-                                ),
-                                DMSAttrConstraint(name="nints", sources=["nints"], value="1"),
-                            ]
-                        ),
-                        Constraint(
-                            [
-                                DMSAttrConstraint(
-                                    name="exp_type", sources=["exp_type"], value="nis_soss"
-                                ),
-                                SimpleConstraint(
-                                    value=False,
-                                    test=lambda value, item: nissoss_calibrated_filter(item)
-                                    == value,
-                                    force_unique=False,
-                                ),
-                            ]
-                        ),
-                    ],
-                    reduce=Constraint.notany,
-                ),
-                # Don't allow NIRSpec invalid optical paths in TSO3
-                Constraint(
-                    [
-                        Constraint(
-                            [
-                                DMSAttrConstraint(
-                                    name="exp_type", sources=["exp_type"], value="nrs_brightobj"
-                                ),
-                                SimpleConstraint(
-                                    value=False,
-                                    test=lambda value, item: nrsfss_valid_detector(item) == value,
-                                    force_unique=False,
-                                ),
-                            ]
-                        ),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                not_ifu,
+                not_nrc_tsgrism_invalid,
+                not_nis_soss_invalid,
+                not_nrs_brightobj_invalid,
             ]
         )
 
@@ -1045,13 +1014,21 @@ class Asn_Lv3WFSCMB(AsnMixin_Science):
     is assumed to be equivalent within an activity.
 
     Characteristics:
+
         - Association type: ``wfs-image3``
         - Pipeline: ``calwebb_wfs-image3``
         - Coarse and fine phasing dithers
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup constraints
+        # Exclude LOS jitter observations; those are processed separately.
+        not_los_jitter = Constraint(
+            [
+                DMSAttrConstraint(name="dms_note", sources=["dms_note"], value="wfsc_los_jitter"),
+            ],
+            reduce=Constraint.notany,
+        )
+
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -1061,14 +1038,7 @@ class Asn_Lv3WFSCMB(AsnMixin_Science):
                 DMSAttrConstraint(name="detector", sources=["detector"]),
                 DMSAttrConstraint(name="obs_id", sources=["obs_id"]),
                 DMSAttrConstraint(name="act_id", sources=["act_id"]),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="dms_note", sources=["dms_note"], value="wfsc_los_jitter"
-                        ),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                not_los_jitter,
             ]
         )
 
@@ -1092,7 +1062,7 @@ class Asn_Lv3WFSCMB(AsnMixin_Science):
         """
         Define product name.
 
-        Modification is to append the `expspcin` value
+        Modification is to append the ``expspcin`` value
         after the calibration suffix.
 
         Returns
@@ -1117,7 +1087,7 @@ class Asn_Lv3WFSCMB(AsnMixin_Science):
         """
         Check if current product has two members.
 
-        If `entry` is given, it is counted as one of the
+        If ``entry`` is given, it is counted as one of the
         members. If not, the existing member list is only
         accounted for.
 
@@ -1165,6 +1135,7 @@ class Asn_Lv3WFSSNRC(AsnMixin_Spectrum):
     Level 3 NIRCam WFSS/Grism Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Gather all grism exposures
@@ -1185,6 +1156,10 @@ class Asn_Lv3WFSSNRC(AsnMixin_Spectrum):
                     sources=["pupil"],
                     value="GRISMR|GRISMC",
                     force_unique=True,
+                ),
+                DMSAttrConstraint(
+                    name="opt_elem2",
+                    sources=["filter"],
                 ),
             ]
         )
@@ -1211,6 +1186,7 @@ class Asn_Lv3WFSSNIS(AsnMixin_Spectrum):
     Level 3 NIRISS WFSS/Grism Association.
 
     Characteristics:
+
         - Association type: ``spec3``
         - Pipeline: ``calwebb_spec3``
         - Gather all grism exposures
@@ -1256,11 +1232,58 @@ class Asn_Lv3WFSSNIS(AsnMixin_Spectrum):
 
 
 @RegistryMarker.rule
+class Asn_Lv3WFSSMIR(AsnMixin_Spectrum):
+    """
+    Level 3 MIRI WFSS/PRISM Association.
+
+    Characteristics:
+
+    - Association type: ``spec3``
+    - Pipeline: ``calwebb_spec3``
+    - Gather all prism exposures
+    """
+
+    def __init__(self, *args, **kwargs):
+        # Setup for checking.
+        self.constraints = Constraint(
+            [
+                Constraint_Target(association=self),
+                DMSAttrConstraint(
+                    name="exp_type",
+                    sources=["exp_type"],
+                    value="mir_wfss",
+                ),
+                DMSAttrConstraint(
+                    name="opt_elem",
+                    sources=["filter"],
+                    value="P750L",
+                ),
+            ]
+        )
+
+        # Check and continue initialization.
+        super().__init__(*args, **kwargs)
+
+    @property
+    def dms_product_name(self):
+        """
+        Return product name.
+
+        Returns
+        -------
+        str
+            The product name.
+        """
+        return dms_product_name_wfss(self)
+
+
+@RegistryMarker.rule
 class Asn_Lv3ImageMosaic(AsnMixin_Science):
     """
     Level 3 Science Image Mosaic Association.
 
     Characteristics:
+
         - Association type: ``image3``
         - Pipeline: ``calwebb_image3``
         - Non-TSO
@@ -1269,7 +1292,6 @@ class Asn_Lv3ImageMosaic(AsnMixin_Science):
     """
 
     def __init__(self, *args, **kwargs):
-        # Setup constraints
         self.constraints = Constraint(
             [
                 Constraint_Optical_Path(),
@@ -1277,16 +1299,7 @@ class Asn_Lv3ImageMosaic(AsnMixin_Science):
                 DMSAttrConstraint(
                     name="wfsvisit", sources=["visitype"], value="((?!wfsc).)*", required=False
                 ),
-                Constraint(
-                    [
-                        DMSAttrConstraint(
-                            name="bkgdtarg",
-                            sources=["bkgdtarg"],
-                        ),
-                        Constraint_TSO(),
-                    ],
-                    reduce=Constraint.notany,
-                ),
+                Constraint_NotBkgdOrTSO(),
             ]
         )
 
@@ -1315,7 +1328,7 @@ class Asn_Lv3ImageMosaic(AsnMixin_Science):
         Returns
         -------
         bool
-            True if candidate type is mosaic, false otherwise.
+            True if candidate type is mosaic, False otherwise.
         """
         # If a group candidate, reject.
         if self.acid.type.lower() != "mosaic":

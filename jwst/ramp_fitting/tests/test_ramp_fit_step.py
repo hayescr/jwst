@@ -1,9 +1,11 @@
 import numpy as np
 import pytest
-from stdatamodels.jwst.datamodels import GainModel, RampModel, ReadnoiseModel, dqflags
+from stdatamodels.jwst.datamodels import GainModel, ImageModel, RampModel, ReadnoiseModel, dqflags
 
+from jwst.lib.tests.helpers import make_sub64p_multistripe_model
 from jwst.lib.tests.test_reffile_utils import generate_test_refmodel_metadata
 from jwst.ramp_fitting.ramp_fit_step import RampFitStep, set_groupdq
+from jwst.refpix.refpix_step import RefPixStep
 
 DELIM = "-" * 80
 
@@ -73,22 +75,27 @@ def setup_inputs():
 
         rampmodel = RampModel((nints, ngroups, nrows, ncols), int_times=int_times)
 
+        rampmodel.meta.filename = "mock_uncal.fits"
+
         rampmodel.meta.instrument.name = "MIRI"
         rampmodel.meta.instrument.detector = "MIRIMAGE"
         rampmodel.meta.instrument.filter = "F480M"
+
         rampmodel.meta.observation.date = "2015-10-13"
+
         rampmodel.meta.exposure.type = "MIR_IMAGE"
         rampmodel.meta.exposure.group_time = deltatime
-        rampmodel.meta.subarray.name = "FULL"
-        rampmodel.meta.subarray.xstart = 1
-        rampmodel.meta.subarray.ystart = 1
-        rampmodel.meta.subarray.xsize = ncols
-        rampmodel.meta.subarray.ysize = nrows
         rampmodel.meta.exposure.frame_time = deltatime
         rampmodel.meta.exposure.ngroups = ngroups
         rampmodel.meta.exposure.group_time = deltatime
         rampmodel.meta.exposure.nframes = 1
         rampmodel.meta.exposure.groupgap = 0
+
+        rampmodel.meta.subarray.name = "FULL"
+        rampmodel.meta.subarray.xstart = 1
+        rampmodel.meta.subarray.ystart = 1
+        rampmodel.meta.subarray.xsize = ncols
+        rampmodel.meta.subarray.ysize = nrows
 
         gain = GainModel(data=gain)
         gain.meta.instrument.name = "MIRI"
@@ -211,6 +218,12 @@ def test_ramp_fit_step(generate_miri_reffiles, setup_inputs, max_cores):
     # Test to make sure the ramps are as expected and that the step is complete
     np.testing.assert_allclose(slopes.data, ans_slopes, rtol=1e-5)
     assert slopes.meta.cal_step.ramp_fit == "COMPLETE"
+    assert cube_model.meta.cal_step.ramp_fit == "COMPLETE"
+
+    # Input is not modified
+    assert slopes is not model
+    assert cube_model is not model
+    assert model.meta.cal_step.ramp_fit is None
 
 
 def test_subarray_5groups(tmp_path_factory):
@@ -350,67 +363,73 @@ def test_set_group_warnings(firstgroup, lastgroup, message, log_watcher):
     watcher.assert_seen()
 
 
-def one_group_suppressed(nints, suppress, setup_inputs):
-    """
-    Creates three pixel ramps.
-    The first ramp has no good groups.
-    The second ramp has one good group.
-    The third ramp has all good groups.
-
-    Sets up the models to be used by the tests for the one
-    group suppression flag.
-    """
-    # Define the data.
-    ngroups, nrows, ncols = 5, 1, 3
-    dims = nints, ngroups, nrows, ncols
-    rnoise, gain = 10, 1
-    group_time, frame_time = 5.0, 1
-    rampmodel, gdq, rnModel, pixdq, err, gmodel = setup_inputs(
+def test_likely_output(tmp_path, setup_inputs):
+    """Test the LIKELY algorithm and the chisq output."""
+    ingain, inreadnoise = 6, 7
+    grouptime = 3.0
+    nints, ngroups, nrows, ncols = 1, 5, 1, 2
+    model, gdq, rnModel, pixdq, err, gain = setup_inputs(
         ngroups=ngroups,
-        readnoise=rnoise,
+        readnoise=inreadnoise,
         nints=nints,
         nrows=nrows,
         ncols=ncols,
-        gain=gain,
-        deltatime=group_time,
+        gain=ingain,
+        deltatime=grouptime,
     )
 
-    rampmodel.meta.exposure.frame_time = frame_time
+    base_arr = np.array([k * 15.75 for k in range(1, ngroups + 1)])
 
-    # Setup the ramp data and DQ.
-    arr = np.array([k + 1 for k in range(ngroups)], dtype=float)
-    sat = dqflags.pixel["SATURATED"]
-    sat_dq = np.array([sat] * ngroups, dtype=rampmodel.groupdq.dtype)
-    zdq = np.array([0] * ngroups, dtype=rampmodel.groupdq.dtype)
-
-    rampmodel.data[0, :, 0, 0] = arr
-    rampmodel.data[0, :, 0, 1] = arr
-    rampmodel.data[0, :, 0, 2] = arr
-
-    rampmodel.groupdq[0, :, 0, 0] = sat_dq  # All groups sat
-    rampmodel.groupdq[0, :, 0, 1] = sat_dq  # 0th good, all others sat
-    rampmodel.groupdq[0, 0, 0, 1] = 0
-    rampmodel.groupdq[0, :, 0, 2] = zdq  # All groups good
-
-    if nints > 1:
-        rampmodel.data[1, :, 0, 0] = arr
-        rampmodel.data[1, :, 0, 1] = arr
-        rampmodel.data[1, :, 0, 2] = arr
-
-        # All good ramps
-        rampmodel.groupdq[1, :, 0, 0] = zdq
-        rampmodel.groupdq[1, :, 0, 1] = zdq
-        rampmodel.groupdq[1, :, 0, 2] = zdq
-
-    rampmodel.suppress_one_group_ramps = suppress
+    rnd1 = np.array([-2.67780363, 2.41978396, 1.11415405, 3.4904681, 2.14907302])
+    rnd2 = np.array([1.44133809, 0.13063589, 0.89151771, 3.14430635, -0.0463224])
+    model.data[0, :, 0, 0] = base_arr + rnd1
+    model.data[0, :, 0, 1] = base_arr + 20 + rnd2
 
     # Call ramp fit through the step class
     slopes, cube_model = RampFitStep.call(
-        rampmodel,
-        override_gain=gmodel,
+        model,
+        algorithm="LIKELY",
+        override_gain=gain,
         override_readnoise=rnModel,
-        suppress_one_group=suppress,
-        maximum_cores="none",
+        save_opt=True,
+        output_dir=str(tmp_path),
     )
 
-    return slopes, cube_model, dims
+    # Check the output slopes
+    tol = 1e-7
+    check = np.array([[5.609441, 5.2461348]])
+    np.testing.assert_allclose(slopes.data, check, rtol=tol)
+
+    # Check the chisq output array
+    chk_chisq = np.array([[0.43144223, 0.25806388]])
+    fname = tmp_path / "mock_likely_chisq.fits"
+    with ImageModel(fname) as chisq:
+        chisq_data = chisq.data
+    np.testing.assert_allclose(chisq_data, chk_chisq, rtol=tol)
+
+
+def test_uneven_sampling(caplog):
+    caplog.set_level("DEBUG", "stcal")
+
+    # Superstripe ramp model with in-frame reads: readout times are not evenly sampled
+    model = make_sub64p_multistripe_model()
+    model.pixeldq = model.get_default("pixeldq")
+    collated = RefPixStep.call(model)
+    assert len(collated.meta.exposure.read_times) > 0
+
+    # Set the data equal to the read time
+    for group in range(collated.data.shape[1]):
+        collated.data[:, group, :, :] = collated.meta.exposure.read_times[group][0]
+
+    # Call ramp fit with OLS_C: should reset to LIKELY
+    # Don't configure the log, so that caplog picks up the messages correctly.
+    ramp_fit = RampFitStep.call(collated, algorithm="OLS_C", configure_log=False)
+
+    # Log message from the step
+    assert "Setting the algorithm to LIKELY for unevenly sampled exposure" in caplog.text
+    # Log message from stcal
+    assert "Using explicit read times" in caplog.text
+
+    # All slopes should be 1.0, since value matches read time
+    np.testing.assert_allclose(ramp_fit[0].data, 1.0)
+    np.testing.assert_allclose(ramp_fit[1].data, 1.0)

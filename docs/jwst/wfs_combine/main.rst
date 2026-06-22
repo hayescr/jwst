@@ -71,7 +71,7 @@ Inputs
 2D calibrated images
 ^^^^^^^^^^^^^^^^^^^^
 
-:Data model: `~jwst.datamodels.ImageModel`
+:Data model: `~stdatamodels.jwst.datamodels.ImageModel`
 :File suffix: _cal
 
 The input to ``wfs_combine`` is a pair of calibrated ("_cal") exposures, specified
@@ -84,7 +84,11 @@ Outputs
 2D combined image
 ^^^^^^^^^^^^^^^^^
 
-:Data model: `~jwst.datamodels.ImageModel`
+:Data model: `~stdatamodels.jwst.datamodels.ImageModel`
 :File suffix: _wfscmb
 
 The output is the combined image, using the product type suffix "_wfscmb."
+
+Reference Files
+---------------
+The ``wfs_combine`` step does not use any reference files.

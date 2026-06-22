@@ -49,22 +49,32 @@ class Affine2d:
     in the image plane.
 
     The theorem states that if f(x,y) and F(u,v) are Fourier pairs, and
-    g(x,y) = f(x',y'), where
+    g(x,y) = f(x',y'), where:
+
+    .. code-block:: text
 
         x' = mx * x  +  sx * y  +  xo
         y' = my * y  +  sy * x  +  yo,
 
     then G(u,v), the Fourier transform of g(x,y), is given by:
 
+    .. code-block:: text
+
         G(u,v) = ( 1/|Delta| ) * exp { (2*Pi*i/Delta) *
                                           [ (my*xo - sx*yo) * u  +
                                             (mx*yo - sy*xo) * v  ] }  *
                                  F{ ( my*u - sy*v) / Delta,
                                     (-sx*u + mx*v) / Delta  }
+
     where:
-                Delta = mx * my - sx * sy.
+
+    .. code-block:: text
+
+        Delta = mx * my - sx * sy.
 
     The reverse transformation, from (x',y') to (x,y) is given by:
+
+    .. code-block:: text
 
         x = (1/Delta) * ( my * x' - sx * y'  -  my * xo + sx * yo )
         y = (1/Delta) * ( mx * y' - sy * x'  -  mx * yo + sy * xo )
@@ -76,6 +86,8 @@ class Affine2d:
     components a=(a_u,a_v) and b=(b_u,b_v) along the u and v axes.
 
     Discussion with Randall Telfer (2018.05.18)  clarified that:
+
+    .. code-block:: text
 
         These constants, properly applied to the analytical transform in a
         "pitch matrix" instead of a scalar "pitch" variable, provide the PSF
@@ -105,9 +117,11 @@ class Affine2d:
         the instrument/telescope, and the optical pupil distortion found from
         fitting on-sky data.
 
-    Jean Baptiste Joseph Fourier 1768-1830
-    Ron Bracewell 1921-2007
-    Code by Anand Sivaramakrishnan 2018
+    References
+    ----------
+    * Jean Baptiste Joseph Fourier 1768-1830
+    * Ron Bracewell 1921-2007
+    * Code by Anand Sivaramakrishnan 2018
     """
 
     def __init__(
@@ -250,9 +264,9 @@ class Affine2d:
         """
         Calculate the phase term in the Bracewell Fourier 2D affine transformation theorem.
 
-        The phase term is:
+        The phase term is::
 
-        1/|Delta| * exp{(2*Pi*i/Delta) * [(my*xo- x*yo) * u + (mx*yo-sy*xo)*v]}
+            1/|Delta| * exp{(2*Pi*i/Delta) * [(my*xo- x*yo) * u + (mx*yo-sy*xo)*v]}
 
         where u and v are in inverse length units.
 
@@ -408,34 +422,37 @@ def find_centroid(a):
 
     Parameters
     ----------
-    a : 2D square float
-        Input image array
+    a : float
+        Input image array (2D square)
 
     Returns
     -------
-    htilt, vtilt : float, float
+    htilt, vtilt : float
         Centroid of a, as offset from array center, as calculated by the DFT's.
 
     Notes
     -----
-    Original domain a, Fourier domain CV
-    sft square image a to CV array, no loss or oversampling - like an fft.
-    Normalize peak of abs(CV) to unity
-    Create 'live area' mask from abs(CV) with slight undersizing
-        (allow for 1 pixel shifts to live data still)
-        (splodges, or full image a la KP)
-    Calculate phase slopes using CV.angle() phase array
-    Calculate mean of phase slopes over mask
-    Normalize phase slopes to reflect image centroid location in pixels
+    * Original domain a, Fourier domain CV
+    * sft square image a to CV array, no loss or oversampling - like an fft.
+    * Normalize peak of abs(CV) to unity
+    * Create 'live area' mask from abs(CV) with slight undersizing
+        * (allow for 1 pixel shifts to live data still)
+        * (splodges, or full image a la KP)
+    * Calculate phase slopes using CV.angle() phase array
+    * Calculate mean of phase slopes over mask
+    * Normalize phase slopes to reflect image centroid location in pixels
 
     XY conventions meshed to lg_model conventions:
-    if you simulate a psf with pixel_offset = ( (0.2, 0.4), ) then blind
-        application  centroid = utils.find_centroid()
+
+    * if you simulate a psf with pixel_offset = ( (0.2, 0.4), ) then blind
+      application ``centroid = utils.find_centroid()``
 
     Returns the image centroid (0.40036, 0.2000093) pixels in image space. To
-    use this in lg_model, nrm_core,... you will want to calculate the new image
-    center using:
-    image_center = utils.centerpoint(s) + np.array((centroid[1], centroid[0])
+    use this in lg_model, nrm_core, etc., you will want to calculate the new image
+    center using::
+
+        image_center = utils.centerpoint(s) + np.array((centroid[1], centroid[0])
+
     and everything holds together sensibly looking at DS9 images of a.
     """
     cv = matrix_dft(a, a.shape[0], a.shape[0], centering="ADJUSTABLE")
@@ -780,14 +797,14 @@ def rotate2dccw(vectors, thetarad):
 
     Parameters
     ----------
-    vectors : np.ndarray[float]
+    vectors : ndarray[float]
        List of 2-D vectors, so the shape is Nx2
     thetarad : float
        Rotation to apply in radians
 
     Returns
     -------
-    np.ndarray[float]
+    ndarray[float]
         Rotated vectors
     """
     c, s = (np.cos(thetarad), np.sin(thetarad))
@@ -1000,7 +1017,7 @@ def _cdmatrix_to_sky(vec, cd11, cd12, cd21, cd22):
 
     Returns
     -------
-    np.ndarray
+    ndarray
         Array containing x pixel scale vector, y pixel scale vector
 
     Notes
@@ -1027,7 +1044,7 @@ def degrees_per_pixel(datamodel):
     float
         Pixel scale in degrees/pixel
     """
-    wcsinfo = datamodel.meta.wcsinfo._instance  # noqa: SLF001
+    wcsinfo = datamodel.meta.wcsinfo.instance
     if "cd1_1" in wcsinfo and "cd1_2" in wcsinfo and "cd2_1" in wcsinfo and "cd2_2" in wcsinfo:
         cd11 = datamodel.meta.wcsinfo.cd1_1
         cd12 = datamodel.meta.wcsinfo.cd1_2

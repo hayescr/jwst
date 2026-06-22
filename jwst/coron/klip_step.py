@@ -1,10 +1,11 @@
-#! /usr/bin/env python
-from stdatamodels.jwst import datamodels
+import logging
 
 from jwst.coron import klip
 from jwst.stpipe import Step
 
 __all__ = ["KlipStep"]
+
+log = logging.getLogger(__name__)
 
 
 class KlipStep(Step):
@@ -38,19 +39,18 @@ class KlipStep(Step):
         psf_sub : CubeModel
             Science target CubeModel with the PSF subtracted
         """
-        with datamodels.open(target) as target_model:
-            # Retrieve the parameter values
-            truncate = self.truncate
-            self.log.info("KL transform truncation = %d", truncate)
+        target_model = self.prepare_output(target)
+        refs_model = self.prepare_output(psfrefs)
 
-            # Get the PSF reference images
-            refs_model = datamodels.open(psfrefs)
+        # Retrieve the parameter values
+        truncate = self.truncate
+        log.info("KL transform truncation = %d", truncate)
 
-            # Call the KLIP routine
-            psf_sub, psf_fit = klip.klip(target_model, refs_model, truncate)
+        # Call the KLIP routine
+        target_model = klip.klip(target_model, refs_model, truncate, return_psf=False)
 
         # Update the step completion status
-        psf_sub.meta.cal_step.klip = "COMPLETE"
+        target_model.meta.cal_step.klip = "COMPLETE"
 
-        # return psf_sub, psf_fit
-        return psf_sub
+        # Return the target model
+        return target_model

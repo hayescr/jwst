@@ -1,4 +1,6 @@
+import logging
 from collections.abc import Sequence
+from pathlib import Path
 
 from stdatamodels.jwst import datamodels
 
@@ -14,18 +16,15 @@ from jwst.tweakreg import tweakreg_step
 
 __all__ = ["Image3Pipeline"]
 
+log = logging.getLogger(__name__)
+
 
 class Image3Pipeline(Pipeline):
     """
     Apply level 3 processing to imaging-mode data from any JWST instrument.
 
     Included steps are:
-        assign_mtwcs
-        tweakreg
-        skymatch
-        outlier_detection
-        resample
-        source_catalog
+    assign_mtwcs, tweakreg, skymatch, outlier_detection, resample, and source_catalog.
     """
 
     class_alias = "calwebb_image3"
@@ -50,10 +49,10 @@ class Image3Pipeline(Pipeline):
 
         Parameters
         ----------
-        input_data : Level3 Association, or `~jwst.datamodels.ModelLibrary`
+        input_data : Level3 Association, or `~jwst.datamodels.library.ModelLibrary`
             The exposures to process
         """
-        self.log.info("Starting calwebb_image3 ...")
+        log.info("Starting calwebb_image3 ...")
 
         # Configure settings for saving results files
         self.outlier_detection.suffix = "crf"
@@ -89,7 +88,7 @@ class Image3Pipeline(Pipeline):
             input_models = self.outlier_detection.run(input_models)
 
         elif self.skymatch.skymethod == "match":
-            self.log.warning(
+            log.warning(
                 "Turning 'skymatch' step off for a single input image when 'skymethod' is 'match'"
             )
 
@@ -121,21 +120,19 @@ class Image3Pipeline(Pipeline):
         if isinstance(input_data, ModelLibrary):
             return input_data
 
-        if isinstance(input_data, (str, dict)):
-            try:
-                # Try opening input as an association
-                return ModelLibrary(
-                    input_data, asn_exptypes=["science"], on_disk=not self.in_memory
-                )
-            except OSError:
-                # Try opening input as a single cal file
-                input_data = datamodels.open(input_data)
-                input_data = [
-                    input_data,
-                ]
-                return ModelLibrary(
-                    input_data, asn_exptypes=["science"], on_disk=not self.in_memory
-                )
+        if isinstance(input_data, str):
+            ext = Path(input_data).suffix
+            if ext in (".fits", ".asdf"):
+                # single file input
+                input_data = self.prepare_output(input_data)
+                input_data = [input_data]
+            elif ext not in (".yaml", ".yml", ".json"):
+                # unrecognized input: neither asn nor datamodel
+                raise ValueError(f"Input file {input_data} has unsupported extension {ext}")
+            return ModelLibrary(input_data, asn_exptypes=["science"], on_disk=not self.in_memory)
+        elif isinstance(input_data, dict):
+            # association as dictionary
+            return ModelLibrary(input_data, asn_exptypes=["science"], on_disk=not self.in_memory)
         elif isinstance(input_data, Sequence):
             return ModelLibrary(input_data, asn_exptypes=["science"], on_disk=not self.in_memory)
         elif isinstance(input_data, datamodels.JwstDataModel):

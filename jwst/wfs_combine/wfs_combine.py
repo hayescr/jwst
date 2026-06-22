@@ -27,19 +27,17 @@ class DataSet:
     """Two dithered input wavefront sensing images to be combined."""
 
     def __init__(
-        self, infile_1, infile_2, outfile, do_refine, flip_dithers, psf_size, blur_size, n_size
+        self, input_model_1, input_model_2, do_refine, flip_dithers, psf_size, blur_size, n_size
     ):
         """
         Assign models to input files.
 
         Parameters
         ----------
-        infile_1 : str
-            First input file
-        infile_2 : str
-            Second input file
-        outfile : str
-            File for combined image
+        input_model_1 : `~stdatamodels.jwst.datamodels.JwstDatamodel`
+            First input datamodel
+        input_model_2 : `~stdatamodels.jwst.datamodels.JwstDatamodel`
+            Second input datamodel
         do_refine : bool
             True if refined offset calculation and application is to be made
         flip_dithers : bool
@@ -51,25 +49,15 @@ class DataSet:
         n_size : int
             Size of interpolation box
         """
-        if outfile == "":
-            log.error("No output product specified in the association table.")
-
-        try:
-            self.input_1 = datamodels.open(infile_1)
-            self.input_2 = datamodels.open(infile_2)
-        except OSError:
-            log.error("Error creating a model from at least 1 of : %s %s", infile_1, infile_2)
-
+        self.input_1 = input_model_1
+        self.input_2 = input_model_2
         self.do_refine = do_refine
 
         if self.input_1.data.shape != self.input_2.data.shape:
             log.error("Incompatible sizes for input files")
 
-        log.info("Output file: %s", outfile)
         log.info("do_refine: %s", do_refine)
         log.info("flip_dithers: %s", flip_dithers)
-        self.file1 = infile_1
-        self.file2 = infile_2
         self.off_x = 0
         self.off_y = 0
         self.flt_off_x = 0
@@ -93,15 +81,11 @@ class DataSet:
 
         # If the shift in x is negative, switch the two images
         if self.off_x < 0 and self.flip_dithers:
-            self.input_1.close()
-            self.input_2.close()
-            self.input_1 = datamodels.open(self.file2)
-            self.input_2 = datamodels.open(self.file1)
-            log.info("File 1 to combine: %s", self.file2)
-            log.info("File 2 to combine: %s", self.file1)
-        else:
-            log.info("File 1 to combine: %s", self.file1)
-            log.info("File 2 to combine: %s", self.file2)
+            tmp = self.input_1
+            self.input_1 = self.input_2
+            self.input_2 = tmp
+        log.info("File 1 to combine: %s", self.input_1.meta.filename)
+        log.info("File 2 to combine: %s", self.input_2.meta.filename)
 
         # Input SCI arrays may have nan's so replace with 0's to prevent
         # later annoyances (hopefully this can be removed later)
@@ -119,13 +103,13 @@ class DataSet:
         # Create a new model using the combined arrays...
         new_model = datamodels.ImageModel(data=data_c, dq=dq_c, err=err_c)
         new_model.update(self.input_1)
-        new_model.history.append(f"Flip dithers = {self.flip_dithers}")
-        new_model.history.append(f"WFS_COMBINE refine offset = {self.do_refine}")
-        new_model.history.append(
+        log.info(f"Flip dithers = {self.flip_dithers}")
+        log.info(f"WFS_COMBINE refine offset = {self.do_refine}")
+        log.info(
             f"WFS_COMBINE X offset applied {str(self.off_x)} pixels "
             f"actual offset {str(round(self.flt_off_x, 2))} pixels"
         )
-        new_model.history.append(
+        log.info(
             f"WFS_COMBINE Y offset applied {str(self.off_y)} pixels "
             f"actual offset {str(round(self.flt_off_y, 2))} pixels"
         )
@@ -237,11 +221,11 @@ class DataSet:
 
         Returns
         -------
-        data_2_a : np.ndarray[float]
+        data_2_a : ndarray[float]
             Aligned SCI array of image #2
-        dq_2_a : np.ndarray[int]
+        dq_2_a : ndarray[int]
             Aligned DQ array of image #2
-        err_2_a : np.ndarray[float]
+        err_2_a : ndarray[float]
             Aligned ERR array of image #2
         """
         data_2_a = self.do_2d_shifts(self.input_2.data)
@@ -320,11 +304,11 @@ class DataSet:
 
         Returns
         -------
-        data_comb : np.ndarray[float]
+        data_comb : ndarray[float]
             Combined SCI array
-        dq_comb : np.ndarray[int]
+        dq_comb : ndarray[int]
             Combined DQ array
-        err_comb : np.ndarray[float]
+        err_comb : ndarray[float]
             Combined ERR array
         """
         data1 = image1.data.astype(float)
@@ -373,12 +357,12 @@ class DataSet:
 
         Parameters
         ----------
-        a : np.ndarray[float]
+        a : ndarray[float]
             Input array
 
         Returns
         -------
-        b : np.ndarray[float]
+        b : ndarray[float]
             Shifted array of input a
         """
         ai_x, af_x = get_final_index_range(self.off_x, a.shape[1])
@@ -461,9 +445,9 @@ def interp_array(sci_data, dq_data, n_size):
 
     Parameters
     ----------
-    sci_data : np.ndarray[float]
+    sci_data : ndarray[float]
         Original SCI image to interpolate over
-    dq_data : np.ndarray[int]
+    dq_data : ndarray[int]
         Corresponding DQ image
     n_size : int
         Size of the interpolation box
@@ -508,7 +492,7 @@ def create_griddata_array(sci_data, pixel, n_size):
 
     Parameters
     ----------
-    sci_data : np.ndarray[float]
+    sci_data : ndarray[float]
         Original SCI image
     pixel : tuple(int,int)
         Coordinates y, x  of pixel to interpolate over
@@ -517,7 +501,7 @@ def create_griddata_array(sci_data, pixel, n_size):
 
     Returns
     -------
-    interp_arr : np.ndarray([int,int,float])
+    interp_arr : ndarray([int,int,float])
         Pixel coords, pixel value for each pixel neighboring the input pixel
     """
     xdim = sci_data.shape[1]
@@ -612,9 +596,9 @@ def get_overlap(sci_int_1, sci_int_2, nom_off_x, nom_off_y):
 
     Parameters
     ----------
-    sci_int_1 : np.ndarray[float]
+    sci_int_1 : ndarray[float]
         Interpolated SCI array for image 1
-    sci_int_2 : np.ndarray[float]
+    sci_int_2 : ndarray[float]
         Interpolated SCI array for image 2
     nom_off_x : int
         Nominal offset in x-direction
@@ -623,9 +607,9 @@ def get_overlap(sci_int_1, sci_int_2, nom_off_x, nom_off_y):
 
     Returns
     -------
-    sub_1 : np.ndarray[float]
+    sub_1 : ndarray[float]
         Overlapping subarray for interpolated image 1
-    sub_2 : np.ndarray[float]
+    sub_2 : ndarray[float]
         Overlapping subarray for interpolated image 2
     """
     # From the nominal offsets, determine array indices to shift image #2
@@ -649,9 +633,9 @@ def calc_refined_offsets(sci_nai_1, sci_nai_2, off_x, off_y, psf_size):
 
     Parameters
     ----------
-    sci_nai_1 : np.ndarray[float]
+    sci_nai_1 : ndarray[float]
         Nominally aligned, interpolated SCI subarray for image 1
-    sci_nai_2 : np.ndarray[float]
+    sci_nai_2 : ndarray[float]
         Nominally aligned, interpolated SCI subarray for image 2
     off_x : int
         Offset in x-direction

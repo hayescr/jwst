@@ -3,12 +3,12 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 import stdatamodels.jwst.datamodels as dm
-from scipy.spatial import ConvexHull, QhullError
-from stcal.alignment.util import sregion_to_footprint
+from astropy.modeling.models import Mapping
+from stcal.alignment import combine_sregions
 
 # step imports
+from jwst.adaptive_trace_model import adaptive_trace_model_step
 from jwst.assign_mtwcs import assign_mtwcs_step
 from jwst.associations.lib.rules_level3_base import format_product
 from jwst.combine_1d import combine_1d_step
@@ -20,7 +20,6 @@ from jwst.extract_1d import extract_1d_step
 from jwst.lib.exposure_types import is_moving_target
 from jwst.master_background import master_background_step
 from jwst.master_background.master_background_step import split_container
-from jwst.mrs_imatch import mrs_imatch_step
 from jwst.outlier_detection import outlier_detection_step
 from jwst.photom import photom_step
 from jwst.pixel_replace import pixel_replace_step
@@ -35,24 +34,17 @@ __all__ = ["Spec3Pipeline"]
 
 # Group exposure types
 IFU_EXPTYPES = ["MIR_MRS", "NRS_IFU"]
-SLITLESS_TYPES = ["NIS_SOSS", "NIS_WFSS", "NRC_WFSS"]
-WFSS_TYPES = ["NIS_WFSS", "NRC_WFSS"]
+SLITLESS_TYPES = ["NIS_SOSS", "NIS_WFSS", "NRC_WFSS", "MIR_WFSS"]
+WFSS_TYPES = ["NIS_WFSS", "NRC_WFSS", "MIR_WFSS"]
 
 
 class Spec3Pipeline(Pipeline):
     """
-    Spec3Pipeline: Processes JWST spectroscopic exposures from Level 2b to 3.
+    Process JWST spectroscopic exposures from Level 2b to 3.
 
-    Included steps are:
-    assign moving target wcs (assign_mtwcs)
-    master background subtraction (master_background)
-    MIRI MRS background matching (mrs_imatch)
-    outlier detection (outlier_detection)
-    2-D spectroscopic resampling (resample_spec)
-    3-D spectroscopic resampling (cube_build)
-    1-D spectral extraction (extract_1d)
-    Absolute Photometric Calibration (photom)
-    1-D spectral combination (combine_1d)
+    Included steps are: assign_mtwcs, master_background,
+    outlier_detection, adaptive_trace_model, pixel_replace, resample_spec,
+    cube_build, extract_1d, photom, combine_1d, and spectral_leak.
     """
 
     class_alias = "calwebb_spec3"
@@ -64,8 +56,8 @@ class Spec3Pipeline(Pipeline):
     step_defs = {
         "assign_mtwcs": assign_mtwcs_step.AssignMTWcsStep,
         "master_background": master_background_step.MasterBackgroundStep,
-        "mrs_imatch": mrs_imatch_step.MRSIMatchStep,
         "outlier_detection": outlier_detection_step.OutlierDetectionStep,
+        "adaptive_trace_model": adaptive_trace_model_step.AdaptiveTraceModelStep,
         "pixel_replace": pixel_replace_step.PixelReplaceStep,
         "resample_spec": resample_spec_step.ResampleSpecStep,
         "cube_build": cube_build_step.CubeBuildStep,
@@ -82,15 +74,15 @@ class Spec3Pipeline(Pipeline):
 
         Parameters
         ----------
-        input_data : str, Level3 Association, or ~jwst.datamodels.JwstDataModel
+        input_data : str, Level3 Association, or \
+                     `~stdatamodels.jwst.datamodels.JwstDataModel`
             The exposure or association of exposures to process
         """
-        self.log.info("Starting calwebb_spec3 ...")
+        log.info("Starting calwebb_spec3 ...")
         asn_exptypes = ["science", "background"]
 
         # Setup sub-step defaults
         self.master_background.suffix = "mbsub"
-        self.mrs_imatch.suffix = "mrs_imatch"
         self.outlier_detection.suffix = "crf"
         self.outlier_detection.save_results = self.save_results
         self.resample_spec.suffix = "s2d"
@@ -105,19 +97,23 @@ class Spec3Pipeline(Pipeline):
         self.spectral_leak.save_results = self.save_results
         self.pixel_replace.suffix = "pixel_replace"
         self.pixel_replace.output_use_model = True
+        self.adaptive_trace_model.output_use_model = True
 
         # Overriding the Step.save_model method for the following steps.
-        # These steps save intermediate files, resulting in meta.filename
+        # These steps may save intermediate files, resulting in meta.filename
         # being modified. This can affect the filenames of subsequent
         # steps.
         self.outlier_detection.save_model = invariant_filename(self.outlier_detection.save_model)
         self.pixel_replace.save_model = invariant_filename(self.pixel_replace.save_model)
+        self.adaptive_trace_model.save_model = invariant_filename(
+            self.adaptive_trace_model.save_model
+        )
 
         # Retrieve the inputs:
         # could either be done via LoadAsAssociation and then manually
         # load input members into models and ModelContainer, or just
         # do a direct open of all members in ASN file, e.g.
-        input_models = dm.open(input_data, asn_exptypes=asn_exptypes)
+        input_models = self.prepare_output(input_data, asn_exptypes=asn_exptypes)
 
         # Immediately update the ASNTABLE keyword value in all inputs,
         # so that all outputs get the new value
@@ -142,7 +138,7 @@ class Spec3Pipeline(Pipeline):
             members_by_type[member["exptype"].lower()].append(member["expname"])
 
         if is_moving_target(input_models[0]):
-            self.log.info("Assigning WCS to a Moving Target exposure.")
+            log.info("Assigning WCS to a Moving Target exposure.")
             # assign_mtwcs modifies input_models in-place
             self.assign_mtwcs.run(input_models)
 
@@ -180,7 +176,7 @@ class Spec3Pipeline(Pipeline):
         # a single ModelContainer.
         sources = [source_models]
         if isinstance(input_models[0], dm.MultiSlitModel):
-            self.log.info("Convert from exposure-based to source-based data.")
+            log.info("Convert from exposure-based to source-based data.")
             sources = list(multislit_to_container(source_models).items())
 
         # Process each source
@@ -207,7 +203,7 @@ class Spec3Pipeline(Pipeline):
                     # name that separates source, background, and virtual slits
                     srcid = self._create_nrsmos_source_id(result)
                     self.output_file = format_product(output_file, source_id=srcid)
-                    self.log.debug(f"output_file = {self.output_file}")
+                    log.debug(f"output_file = {self.output_file}")
 
                 else:
                     # All other types just use the source_id directly in the file name
@@ -219,10 +215,6 @@ class Spec3Pipeline(Pipeline):
             # The MultiExposureModel is a required output, except for WFSS modes.
             if isinstance(result, SourceModelContainer) and (exptype not in WFSS_TYPES):
                 self.save_model(result, "cal")
-
-            # Call the skymatch step for MIRI MRS data
-            if exptype in ["MIR_MRS"]:
-                result = self.mrs_imatch.run(result)
 
             # Call outlier detection and pixel replacement
             resample_complete = None
@@ -237,6 +229,9 @@ class Spec3Pipeline(Pipeline):
                 else:
                     self.outlier_detection.mode = "spec"
                 result = self.outlier_detection.run(result)
+
+                # model the spectral trace and optionally oversample the data
+                result = self.adaptive_trace_model.run(result)
 
                 # interpolate pixels that have a NaN value or are flagged
                 # as DO_NOT_USE or NON_SCIENCE.
@@ -328,7 +323,7 @@ class Spec3Pipeline(Pipeline):
                 result = self.extract_1d.run(result)
                 result = self.combine_1d.run(result)
             else:
-                self.log.warning("Resampling was not completed. Skipping extract_1d.")
+                log.warning("Resampling was not completed. Skipping extract_1d.")
 
         # Save the final output products for WFSS modes
         if exptype in WFSS_TYPES:
@@ -336,17 +331,18 @@ class Spec3Pipeline(Pipeline):
                 x1d_output = make_wfss_multiexposure(wfss_x1d)
                 self._populate_wfss_sregion(x1d_output, input_models)
                 x1d_filename = output_file + "_x1d.fits"
-                self.log.info(f"Saving the final x1d product as {x1d_filename}.")
+                log.info(f"Saving the final x1d product as {x1d_filename}.")
                 x1d_output.save(x1d_filename)
             if self.save_results:
                 c1d_output = make_wfss_multicombined(wfss_comb)
                 c1d_filename = output_file + "_c1d.fits"
-                self.log.info(f"Saving the final c1d product as {c1d_filename}.")
+                log.info(f"Saving the final c1d product as {c1d_filename}.")
                 c1d_output.save(c1d_filename)
 
-        input_models.close()
+        if input_models is not input_data:
+            input_models.close()
 
-        self.log.info("Ending calwebb_spec3")
+        log.info("Ending calwebb_spec3")
         return
 
     def _create_nrsfs_slit_name(self, source_models):
@@ -358,7 +354,7 @@ class Spec3Pipeline(Pipeline):
 
         Parameters
         ----------
-        source_models : list of `~jwst.datamodels.DataModel`
+        source_models : list of `~stdatamodels.jwst.datamodels.JwstDataModel`
             List of input source models.
 
         Returns
@@ -385,7 +381,7 @@ class Spec3Pipeline(Pipeline):
 
         Parameters
         ----------
-        source_models : list of `~jwst.datamodels.DataModel`
+        source_models : list of `~stdatamodels.jwst.datamodels.JwstDataModel`
             List of input source models.
 
         Returns
@@ -401,13 +397,13 @@ class Spec3Pipeline(Pipeline):
         if "BKG" in source_name:
             # prepend "b" to the source_id number and format to 9 chars
             srcid = f"b{str(source_id):>09s}"
-            self.log.debug(f"Source {source_name} is a MOS background slitlet: ID={srcid}")
+            log.debug(f"Source {source_name} is a MOS background slitlet: ID={srcid}")
 
         # MOS virtual sources have a negative source_id value
         elif source_id < 0:
             # prepend "v" to the source_id number and remove the leading negative sign
             srcid = f"v{str(source_id)[1:]:>09s}"
-            self.log.debug(f"Source {source_name} is a MOS virtual slitlet: ID={srcid}")
+            log.debug(f"Source {source_name} is a MOS virtual slitlet: ID={srcid}")
 
         # Regular MOS sources
         else:
@@ -420,42 +416,50 @@ class Spec3Pipeline(Pipeline):
         """
         Generate cumulative S_REGION footprint from input grism images.
 
-        This takes the input model S_REGION vertices, generates a convex hull
-        from those points and returns the vertices corresponding to that hull
-        in counterclockwise order.
+        Take the input S_REGION values from all input models, and combine
+        them using a polygon union to create a cumulative footprint for the output WFSS product.
+        The union is performed in pixel coordinates to avoid distortion,
+        so the WCS of the first slit
+        of the first input model is used to convert to and from sky coordinates.
 
         Parameters
         ----------
-        wfss_model : ~datamodels.WfssMultiExposureModel
+        wfss_model : `~stdatamodels.jwst.datamodels.WFSSMultiSpecModel`
             The newly generated WfssMultiExposureModel made as part of
             the save operation for spec3 processing of WFSS data.
 
-        cal_model_list : list(~datamodels.MultiSlitModel)
+        cal_model_list : list of `~stdatamodels.jwst.datamodels.MultiSlitModel`
             The list of input_models provided to Spec3Pipeline by the
             input association.
         """
-        # Make array of S_REGION vertices from input model values, then generate convex hull
+        # WCS of any slit should be ok - internally this does a round-trip, so any offsets
+        # introduced for a specific slit won't matter
+        wcs = cal_model_list[0].slits[0].meta.wcs
         try:
-            input_sregion_vertices = np.concatenate(
-                [sregion_to_footprint(w.meta.wcsinfo.s_region) for w in cal_model_list]
-            )
-            convex_sregion_hull = ConvexHull(input_sregion_vertices)
-        except AttributeError as err:
+            input_sregions = [w.slits[0].meta.wcsinfo.s_region for w in cal_model_list]
+        except AttributeError:
             log.warning(
-                "Missing S_REGION info in input files. Skipping S_REGION assignment for x1d output."
+                "One or more input model(s) are missing an `s_region` attribute; "
+                "output S_REGION will not be set."
             )
-            log.debug(err)
             return
-        except QhullError as qerr:
-            log.warning(
-                "Error generating convex hull from input S_REGION vertices. Skipping S_REGION "
-                "assignment for x1d output."
-            )
-            log.debug(qerr)
+
+        # Modify the det2world transform to ignore extra inputs/outputs (wavelength and order)
+        if "moving_target" in wcs.available_frames:
+            # This should never be hit for WFSS data but is here just in case
+            det2world = wcs.get_transform("detector", "moving_target")
+        else:
+            det2world = wcs.get_transform("detector", "world")
+        mapping1 = Mapping((0, 1, 0, 1))  # last two are placeholders and don't do anything
+        mapping1.inverse = Mapping((0, 1), n_inputs=4)
+        mapping2 = Mapping((0, 1), n_inputs=4)
+        mapping2.inverse = Mapping((0, 1, 0, 1))
+        det2world = mapping1 | det2world | mapping2
+
+        try:
+            sregion = combine_sregions(input_sregions, det2world)
+        except ValueError as e:
+            log.warning(f"Could not combine S_REGIONs: {e}. Output S_REGION will not be set.")
             return
-        # Index vertices on those selected by ConvexHull
-        # By default, ConvexHull vertices are returned in counterclockwise order
-        convex_vertices = input_sregion_vertices[convex_sregion_hull.vertices]
-        s_region = "POLYGON ICRS  " + " ".join([f"{x:.9f}" for x in convex_vertices.flatten()])
-        # Populate S_REGION in first entry of output model spec list.
-        wfss_model.spec[0].s_region = s_region
+        log.info(f"Setting S_REGION for combined footprint to: {sregion}")
+        wfss_model.spec[0].s_region = sregion

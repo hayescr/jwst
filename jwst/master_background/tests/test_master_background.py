@@ -39,7 +39,10 @@ def nirspec_rate():
     xsize = 2048
     shape = (ysize, xsize)
     im = datamodels.ImageModel(shape)
-    im.var_rnoise += 1
+    im.dq = im.get_default("dq")
+    im.err = im.get_default("err")
+    im.var_rnoise = im.get_default("var_rnoise")
+    im.var_poisson = im.get_default("var_poisson")
     im.meta.target = {"ra": 100.1237, "dec": 39.86, "source_type_apt": "EXTENDED"}
     im.meta.wcsinfo = {
         "dec_ref": 40,
@@ -165,6 +168,8 @@ def nirspec_asn(nirspec_cal_pair, tmp_cwd):
 def science_image():
     """Generate science image."""
     image = datamodels.ImageModel((10, 10))
+    image.dq = image.get_default("dq")
+    image.err = image.get_default("err")
     image.meta.instrument.name = "MIRI"
     image.meta.instrument.detector = "MIRIMAGE"
     image.meta.exposure.type = "MIR_LRS-FIXEDSLIT"
@@ -192,9 +197,12 @@ def test_master_background_userbg(tmp_cwd, user_background, science_image):
     )
 
     assert type(science_image) is type(result)
-    assert result is not science_image
     assert result.meta.cal_step.master_background == "COMPLETE"
     assert result.meta.background.master_background_file == "user_background.fits"
+
+    # Input is not modified
+    assert result is not science_image
+    assert science_image.meta.cal_step.master_background is None
 
 
 def test_master_background_medfilt(tmp_cwd, nirspec_asn):
@@ -241,6 +249,10 @@ def test_master_background_logic(tmp_cwd, user_background, science_image):
     assert result.meta.cal_step.master_background == "SKIPPED"
     assert type(science_image) is type(result)
 
+    # Input is not modified
+    assert result is not science_image
+    assert science_image.meta.cal_step.master_background is None
+
     # Now force it
     result = MasterBackgroundStep.call(
         science_image, user_background=user_background, force_subtract=True
@@ -248,6 +260,10 @@ def test_master_background_logic(tmp_cwd, user_background, science_image):
 
     assert result.meta.cal_step.master_background == "COMPLETE"
     assert type(science_image) is type(result)
+
+    # Input is still not modified
+    assert result is not science_image
+    assert science_image.meta.cal_step.master_background is None
 
 
 def test_copy_background_to_surf_bright():
@@ -301,3 +317,25 @@ def test_split_container(tmp_path):
     assert bkg[0].meta.filename == "bar.fits"
     assert len(sci) == 1
     assert len(bkg) == 1
+
+
+def test_skip_unsupported_type(caplog):
+    model = datamodels.SlitModel()
+    result = MasterBackgroundStep.call(model)
+    assert result.meta.cal_step.master_background == "FAILED"
+    assert "SlitModel'> cannot be handled" in caplog.text
+
+    # Input is not modified
+    assert result is not model
+    assert model.meta.cal_step.master_background is None
+
+
+def test_skip_unsupported_without_user_bg(caplog):
+    model = datamodels.ImageModel()
+    result = MasterBackgroundStep.call(model)
+    assert result.meta.cal_step.master_background == "FAILED"
+    assert "ImageModel'> cannot be handled without user-supplied" in caplog.text
+
+    # Input is not modified
+    assert result is not model
+    assert model.meta.cal_step.master_background is None

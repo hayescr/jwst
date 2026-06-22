@@ -26,6 +26,12 @@ WCS reference file information per EXP_TYPE
  | WCS pipeline coordinate frames: detector, miri_focal, xyan, v2v3, world
  | Implements: CDP4 reference data delivery, MIRI-TN-00001-ETH_Iss1-3_Calibrationproduct_MRS_d2c.pdf
 
+ **MIR_WFSS:**
+
+ | reftypes: *specwcs*, *distortion*, *filteroffset*
+ | WCS pipeline coordinate frames: grism_detector, detector, v2v3, world
+ | Implements: reference files provided by MIRI team
+ 
 **NRC_IMAGE, NRC_TSIMAGE, NRC_FOCUS, NRC_TACONFIRM, NRC_TACQ:**
 
  | reftypes: *distortion*, *filteroffset*
@@ -34,7 +40,7 @@ WCS reference file information per EXP_TYPE
 
 **NRC_WFSS, NRC_TSGRISM:**
 
- | reftypes: *specwcs*, *distortion*, *filteroffset*
+ | reftypes: *specwcs*, *distortion*, *filteroffset*, *regions* (DHS only)
  | WCS pipeline coordinate frames: grism_detector, detector, v2v3, world
  | Implements: reference files provided by NIRCam team
 
@@ -65,8 +71,8 @@ WCS reference file information per EXP_TYPE
 **NRS_IFU:**
 
  | reftypes: *fpa*, *camera*, *disperser*, *collimator*, *msa*, *wavelengthrange*, *fore*, *ote*,
- | *ifufore*, *ifuslicer*, *ifupost*
- | WCS pipeline coordinate frames: detector, sca, gwa, slit_frame, slicer, msa_frame, oteip, v2v3, v2v3vacorr, world
+ | *ifufore*, *ifuslicer*, *ifupost*, *chromcorr*
+ | WCS pipeline coordinate frames: detector, sca, gwa, slit_frame, slicer, msa_frame, oteip, oteip_chromocorr, v2v3, v2v3vacorr, world
  | Implements: reference files provided by NIRSpec team
 
 **NRS_IMAGE, NRS_CONFIRM, NRS_FOCUS, NRS_MIMF, NRS_MSATA, NRS_TACONFIRM, NRS_WATA:**

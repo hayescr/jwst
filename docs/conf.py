@@ -22,6 +22,10 @@ from configparser import ConfigParser
 
 from stpipe import Step
 from sphinx.ext.autodoc import AttributeDocumenter
+from sphinx.util.docutils import SphinxDirective
+from docutils import nodes
+
+from jwst import __version__ as version
 
 
 class StepSpecDocumenter(AttributeDocumenter):
@@ -49,7 +53,10 @@ class StepSpecDocumenter(AttributeDocumenter):
 
 def setup(app):
     # add a custom AttributeDocumenter subclass to handle Step.spec formatting
-    app.add_autodocumenter(StepSpecDocumenter, True)
+    def register_documenter(app, config):
+        app.add_autodocumenter(StepSpecDocumenter, True)
+    # register it with a high priority so it behaves with the built-in autodoc
+    app.connect("config-inited", register_documenter, priority=9000)
 
 
 conf = ConfigParser()
@@ -65,20 +72,22 @@ sys.path.insert(0, os.path.abspath('exts/'))
 with open(Path(__file__).parent.parent / "pyproject.toml", "rb") as metadata_file:
     metadata = tomllib.load(metadata_file)['project']
 
-on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
-
 # Configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {
-    'python': ('https://docs.python.org/3/', None),
-    'numpy': ('https://numpy.org/devdocs', None),
-    'scipy': ('https://scipy.github.io/devdocs', None),
-    'matplotlib': ('https://matplotlib.org/', None),
+    'asdf': ('https://asdf.readthedocs.io/en/stable/', None),
     'astropy': ('https://docs.astropy.org/en/stable/', None),
+    'drizzle': ('https://spacetelescope-drizzle.readthedocs.io/en/latest/', None),
+    'gwcs': ('https://gwcs.readthedocs.io/en/latest/', None),
+    'matplotlib': ('https://matplotlib.org/', None),
+    'numpy': ('https://numpy.org/devdocs', None),
     'photutils': ('https://photutils.readthedocs.io/en/stable/', None),
-    'gwcs': ('https://gwcs.readthedocs.io/en/stable/', None),
-    'stdatamodels': ('https://stdatamodels.readthedocs.io/en/latest/', None),
+    'python': ('https://docs.python.org/3/', None),
+    'requests': ('https://requests.readthedocs.io/en/latest/', None),
+    'scipy': ('https://scipy.github.io/devdocs', None),
     'stcal': ('https://stcal.readthedocs.io/en/latest/', None),
-    'drizzle': ('https://drizzlepac.readthedocs.io/en/latest/', None),
+    'stdatamodels': ('https://stdatamodels.readthedocs.io/en/latest/', None),
+    'stpipe': ('https://stpipe.readthedocs.io/en/latest/', None),
+    'synphot': ('https://synphot.readthedocs.io/en/latest/', None),
     'tweakwcs': ('https://tweakwcs.readthedocs.io/en/latest/', None),
 }
 
@@ -90,6 +99,7 @@ intersphinx_mapping = {
 # ones.
 extensions = [
     'numfig',
+    'numpydoc',
     'sphinxcontrib.jquery',
     'pytest_doctestplus.sphinx.doctestplus',
     'sphinx.ext.autodoc',
@@ -99,16 +109,12 @@ extensions = [
     'sphinx.ext.inheritance_diagram',
     'sphinx.ext.viewcode',
     'sphinx.ext.autosummary',
-    'sphinx.ext.napoleon',
     'sphinx_automodapi.automodapi',
     'sphinx_automodapi.automodsumm',
     'sphinx_automodapi.autodoc_enhancements',
     'sphinx_automodapi.smart_resolver',
-    'sphinx.ext.imgmath',
+    'sphinx.ext.mathjax',
 ]
-
-if on_rtd:
-    extensions.append('sphinx.ext.mathjax')
 
 # Add any paths that contain templates here, relative to this directory.
 # templates_path = ['_templates']
@@ -237,7 +243,7 @@ html_theme_options = {
     # "headbgcolor": "white",
 }
 
-html_logo = '_static/stsci_pri_combo_mark_white.png'
+html_logo = '_static/jwst_logo.png'
 
 # Add any paths that contain custom themes here, relative to this directory.
 #html_theme_path = []
@@ -261,6 +267,8 @@ html_logo = '_static/stsci_pri_combo_mark_white.png'
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 
+html_static_path = ["_static"]
+html_css_files = ["custom.css"]
 
 # Add any extra paths that contain custom files (such as robots.txt or
 # .htaccess) here, relative to this directory. These files are copied
@@ -462,9 +470,13 @@ epub_exclude_files = ['search.html']
 linkcheck_retry = 5
 linkcheck_ignore = [
     "http://stsci.edu/schemas/fits-schema/",  # Old schema from CHANGES.rst
+    "https://stsci.edu",  # CI blocked by service provider
     "https://jwst-docs.stsci.edu",  # CI blocked by service provider
+    "https://outerspace.stsci.edu",  # CI blocked by service provider
     "https://jira.stsci.edu/",  # Internal access only
-    r"https://github\.com/spacetelescope/jwst/(?:issues|pull)/\d+",
+    r"https://.*\.readthedocs\.io",  # 429 Client Error: Too Many Requests
+    "https://doi.org",  # CI blocked by service provider (timeout)
+    r"https://github\.com/spacetelescope/jwst/(?:issues|pull|blob)",
 ]
 linkcheck_timeout = 180
 linkcheck_anchors = False
@@ -473,4 +485,4 @@ linkcheck_allow_unauthorized = False
 
 # Enable nitpicky mode - which ensures that all references in the docs
 # resolve.
-nitpicky = False
+nitpicky = True

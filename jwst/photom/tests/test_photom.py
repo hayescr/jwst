@@ -8,6 +8,7 @@ from stdatamodels.jwst import datamodels
 from stdatamodels.jwst.datamodels import SpecModel, TSOMultiSpecModel
 
 from jwst.datamodels.utils.tso_multispec import make_tso_specmodel
+from jwst.extract_1d.tests.helpers import simple_wcs_func
 from jwst.lib.dispaxis import get_dispersion_direction
 from jwst.photom import photom
 
@@ -124,12 +125,12 @@ def mk_soss_spec(settings, speclen):
                         [np.linspace(0.6, 4.0, speclen[i])]
                         + [
                             np.ones(speclen[i])
-                            for _ in range(len(SpecModel().spec_table.dtype) - 1)
+                            for _ in range(len(SpecModel().get_dtype("spec_table")) - 1)
                         ]
                     )
                 )
             ),
-            dtype=SpecModel().spec_table.dtype,
+            dtype=SpecModel().get_dtype("spec_table"),
         )
         specmodel = datamodels.SpecModel(spec_table=otab)
         specmodel.spectral_order = inspec["order"]
@@ -388,6 +389,8 @@ def create_input(
     input_model.meta.exposure.type = exptype
     input_model.meta.subarray.xstart = 1
     input_model.meta.subarray.ystart = 1
+    input_model.meta.observation.date = "2024-01-01"
+    input_model.meta.observation.time = "00:00:00"
 
     if data is not None:
         input_model.meta.subarray.xsize = data.shape[-1]
@@ -620,6 +623,14 @@ def create_photom_nrs_msa(min_wl=1.0, max_wl=5.0, min_r=8.0, max_r=9.0):
     )
     ftab = datamodels.NrsMosPhotomModel(phot_table=reftab)
 
+    # Add required metadata
+    ftab.meta.description = "Test description"
+    ftab.meta.reftype = "photom"
+    ftab.meta.author = "Test Author"
+    ftab.meta.pedigree = "test"
+    ftab.meta.useafter = "2024-01-01"
+    ftab.meta.instrument.name = "NIRSPEC"
+
     return ftab
 
 
@@ -696,7 +707,7 @@ def create_photom_niriss_wfss(min_wl=1.0, max_wl=5.0, min_r=8.0, max_r=9.0):
         dtype=dtype,
     )
     ftab = datamodels.NisWfssPhotomModel(phot_table=reftab)
-
+    ftab.phot_unit = "MJy micron s / (DN sr)"
     return ftab
 
 
@@ -801,7 +812,7 @@ def create_photom_niriss_image():
     return ftab
 
 
-def create_photom_miri_mrs(shape, value, pixel_area, photmjsr):
+def create_photom_miri_mrs(shape, value, pixel_area, photmjsr, timecoeff=False):
     """
     Create a photom reference file for MIRI MRS.
 
@@ -815,18 +826,55 @@ def create_photom_miri_mrs(shape, value, pixel_area, photmjsr):
         The pixel solid angle in steradians.
     photmjsr : float
         The value to assign to the MJy / sr keyword.
+    timecoeff : bool, optional
+        If True, time dependence coefficient tables are added.
 
     Returns
     -------
-    ftab : `~jwst.datamodels.JwstDataModel`
+    ftab : `~jwst.datamodels.MirMrsPhotomModel`
         An open data model for a MIRI MRS photom reference file.
     """
+    # add photom images
     data = np.zeros(shape, dtype=np.float32) + value
     err = np.ones(shape, dtype=np.float32)
     dq = np.zeros(shape, dtype=np.uint32)
     pixsiz = np.zeros(shape, dtype=np.float32) + pixel_area
 
-    ftab = datamodels.MirMrsPhotomModel(data=data, err=err, dq=dq, pixsiz=pixsiz)
+    # exponential time coefficients
+    if timecoeff:
+        # add time coefficients
+        nrow = 10
+        binwave = np.linspace(6, 10, nrow)
+        alpha = np.full(nrow, -1.01)
+        year1value = np.full(nrow, 0.01)
+        tsoft = np.full(nrow, 1.0)
+        t0 = np.full(nrow, 59680.0)
+
+        dtypec = np.dtype(
+            [
+                ("binwave", "<f4"),
+                ("alpha", "<f4"),
+                ("year1value", "<f4"),
+                ("tsoft", "<f4"),
+                ("t0", "<f4"),
+            ]
+        )
+        reftab_plaw = np.array(
+            list(zip(binwave, alpha, year1value, tsoft, t0, strict=True)), dtype=dtypec
+        )
+
+        ftab = datamodels.MirMrsPhotomModel(
+            data=data,
+            err=err,
+            dq=dq,
+            pixsiz=pixsiz,
+            timecoeff_powerlaw_ch1=reftab_plaw,
+            timecoeff_powerlaw_ch2=reftab_plaw,
+            timecoeff_powerlaw_ch3=reftab_plaw,
+            timecoeff_powerlaw_ch4=reftab_plaw,
+        )
+    else:
+        ftab = datamodels.MirMrsPhotomModel(data=data, err=err, dq=dq, pixsiz=pixsiz)
     ftab.meta.photometry.conversion_megajanskys = photmjsr
 
     return ftab
@@ -930,14 +978,43 @@ def create_photom_miri_image():
     reftab = np.array(
         list(zip(filter_list, subarray, photmjsr, uncertainty, strict=True)), dtype=dtype
     )
-    timecoeff_amp = np.linspace(2.1, 2.1 + (nrows - 1.0) * 0.1, nrows)
-    timecoeff_tau = np.asarray([145, 145, 145])
-    timecoeff_t0 = np.asarray([59720, 59720, 59720])
-    dtypec = np.dtype([("amplitude", "<f4"), ("tau", "<f4"), ("t0", "<f4")])
-    reftabc = np.array(
-        list(zip(timecoeff_amp, timecoeff_tau, timecoeff_t0, strict=True)), dtype=dtypec
+    timecoeff_amp = np.linspace(2.1, 2.1 + (nrows - 1.0) * 0.1, nrows) / photmjsr
+    timecoeff_tau = np.full(nrows, 145)
+    timecoeff_t0 = np.full(nrows, 59720)
+    timecoeff_const = np.full(nrows, 1.0)
+    dtypec = np.dtype(
+        [
+            ("filter", "S12"),
+            ("subarray", "S15"),
+            ("amplitude", "<f4"),
+            ("tau", "<f4"),
+            ("t0", "<f4"),
+            ("const", "<f4"),
+        ]
     )
-    ftab = datamodels.MirImgPhotomModel(phot_table=reftab, timecoeff=reftabc)
+    reftabc = np.array(
+        list(
+            zip(
+                filter_list,
+                subarray,
+                timecoeff_amp,
+                timecoeff_tau,
+                timecoeff_t0,
+                timecoeff_const,
+                strict=True,
+            )
+        ),
+        dtype=dtypec,
+    )
+    ftab = datamodels.MirImgPhotomModel(phot_table=reftab, timecoeff_exponential=reftabc)
+
+    # Add required metadata
+    ftab.meta.description = "Test description"
+    ftab.meta.reftype = "photom"
+    ftab.meta.author = "Test Author"
+    ftab.meta.pedigree = "test"
+    ftab.meta.useafter = "2024-01-01"
+    ftab.meta.instrument.name = "MIRI"
 
     return ftab
 
@@ -968,6 +1045,14 @@ def create_photom_nircam_image():
     )
 
     ftab = datamodels.NrcImgPhotomModel(phot_table=reftab)
+
+    # Add required metadata
+    ftab.meta.description = "Test description"
+    ftab.meta.reftype = "photom"
+    ftab.meta.author = "Test Author"
+    ftab.meta.pedigree = "test"
+    ftab.meta.useafter = "2024-01-01"
+    ftab.meta.instrument.name = "NIRCAM"
 
     return ftab
 
@@ -1077,7 +1162,7 @@ def create_photom_nircam_wfss(min_wl=2.4, max_wl=5.0, min_r=8.0, max_r=9.0):
     )
 
     ftab = datamodels.NrcWfssPhotomModel(phot_table=reftab)
-
+    ftab.phot_unit = "Angstrom MJy s / (DN sr)"
     return ftab
 
 
@@ -1401,15 +1486,6 @@ def test_nirspec_msa():
     assert np.all(result)
 
 
-""" Skip this test because it would require a realistic wcs.
-def test_nirspec_ifu():
-
-    input_model = create_input("NIRSPEC", "NRS1", "NRS_IFU",
-                               filter="F170LP", grating="G235M")
-    ds = photom.DataSet(input_model)
-"""
-
-
 def test_niriss_wfss():
     """Test the calc_niriss method of the DataSet class, WFSS data."""
     input_model = create_input("NIRISS", "NIS", "NIS_WFSS", filter_used="GR150R", pupil="F140M")
@@ -1423,6 +1499,8 @@ def test_niriss_wfss():
         input_data = slit.data  # this is from save_input
         output = ds.input.slits[k].data  # ds.input is the output
         sp_order = slit.meta.wcsinfo.spectral_order
+
+        # retrieve relevant photom table data
         rownum = find_row_in_ftab(
             save_input, ftab, ["filter", "pupil"], slitname=None, order=sp_order
         )
@@ -1434,8 +1512,15 @@ def test_niriss_wfss():
         ix = shape[1] // 2
         iy = shape[0] // 2
         wl = slit.wavelength[iy, ix]
+
+        # compute dispersion
+        dispersion_array = np.gradient(slit.wavelength[:, ix])
+        dispersion = dispersion_array[iy]
+
+        # compute expected value
         rel_resp = np.interp(wl, wavelength, relresponse, left=np.nan, right=np.nan)
-        compare = photmjsr * rel_resp
+        compare = photmjsr * rel_resp / np.abs(dispersion)
+
         # Compare the values at the center pixel.
         ratio = output[iy, ix] / input_data[iy, ix]
         result.append(np.allclose(ratio, compare, rtol=1.0e-7))
@@ -1555,6 +1640,77 @@ def test_miri_mrs():
     assert np.all(result)
 
 
+def test_miri_mrs_time_cor():
+    """Test the calc_miri method of the DataSet class, MRS data."""
+    input_model = create_input("MIRI", "MIRIFULONG", "MIR_MRS", filter_used="F1500W", band="LONG")
+    input_model.meta.exposure.mid_time = 59700.0
+    shape = input_model.data.shape
+
+    # Mock a wcs
+    input_model.meta.wcs = simple_wcs_func()
+    input_model.meta.wcs.bounding_box = ((-0.5, shape[-1] - 0.5), (-0.5, shape[-2] - 0.5))
+
+    save_input = input_model.copy()
+    ds = photom.DataSet(input_model, apply_time_correction=True)
+    value = 1.436
+    pixel_area = 0.0436
+    photmjsr = 17.3
+    ftab = create_photom_miri_mrs(
+        shape, value=value, pixel_area=pixel_area, photmjsr=photmjsr, timecoeff=True
+    )
+    ds.calc_miri(ftab)
+
+    input_data = save_input.data
+    output = ds.input.data  # ds.input is the output
+
+    result = []
+    # Check the photometry keywords.
+    result.append(
+        math.isclose(photmjsr, ds.input.meta.photometry.conversion_megajanskys, rel_tol=1.0e-12)
+    )
+    result.append(
+        math.isclose(
+            photmjsr * MJSR_TO_UJA2,
+            ds.input.meta.photometry.conversion_microjanskys,
+            rel_tol=1.0e-12,
+        )
+    )
+    # Check the data values.
+    expected_time_correction = 0.17933886403066845
+    compare = value / expected_time_correction
+    ratio = output / input_data
+    np.testing.assert_allclose(ratio, compare, rtol=1e-6)
+
+
+def test_miri_mrs_match_nans():
+    """Test that NaNs and flags match in MRS output."""
+    input_model = create_input("MIRI", "MIRIFULONG", "MIR_MRS", filter_used="F1500W", band="LONG")
+
+    # add a NaN in the data that is not in err/var
+    input_model.data[10, 10] = np.nan
+
+    save_input = input_model.copy()
+    ds = photom.DataSet(input_model)
+    value = 1.436
+    pixel_area = 0.0436
+    photmjsr = 17.3
+    shape = save_input.data.shape
+    ftab = create_photom_miri_mrs(shape, value, pixel_area, photmjsr)
+    ds.calc_miri(ftab)
+
+    # input unchanged
+    assert np.isnan(save_input.data[10, 10])
+    assert ~np.isnan(save_input.err[10, 10])
+    assert ~np.isnan(save_input.var_poisson[10, 10])
+    assert (save_input.dq[10, 10] & datamodels.dqflags.pixel["DO_NOT_USE"]) == 0
+
+    # output has NaNs at the bad pixel
+    for ext in ["data", "err", "var_poisson", "var_rnoise", "var_flat"]:
+        assert np.isnan(getattr(ds.input, ext)[10, 10])
+    # DQ has do not use
+    assert (ds.input.dq[10, 10] & datamodels.dqflags.pixel["DO_NOT_USE"]) > 0
+
+
 def test_miri_lrs():
     """Test the calc_miri method of the DataSet class, LRS data."""
     input_model = create_input("MIRI", "MIRIMAGE", "MIR_LRS-FIXEDSLIT", filter_used="P750L")
@@ -1594,13 +1750,41 @@ def test_miri_image():
     output = ds.input.data  # ds.input is the output
     rownum = find_row_in_ftab(save_input, ftab, ["filter"], slitname=None, order=None)
     photmjsr = ftab.phot_table["photmjsr"][rownum]
-    amplitude = ftab.timecoeff["amplitude"][rownum]
-    tau = ftab.timecoeff["tau"][rownum]
-    t0 = ftab.timecoeff["t0"][rownum]
+    amplitude = ftab.timecoeff_exponential["amplitude"][rownum]
+    tau = ftab.timecoeff_exponential["tau"][rownum]
+    t0 = ftab.timecoeff_exponential["t0"][rownum]
+    const = ftab.timecoeff_exponential["const"][rownum]
     shape = input_data.shape
     ix = shape[1] // 2
     iy = shape[0] // 2
-    compare = photmjsr + amplitude * np.exp(-(60000 - t0) / tau)  # Added for new PHOTOM step
+    compare = photmjsr / (amplitude * np.exp(-(60000 - t0) / tau) + const)
+    # Compare the values at the center pixel.
+    ratio = output[iy, ix] / input_data[iy, ix]
+    assert_allclose(ratio, compare, rtol=1.0e-7)
+
+
+def test_miri_image_no_time_corr():
+    """Test the calc_miri method of the DataSet class, image data."""
+    input_model = create_input("MIRI", "MIRIMAGE", "MIR_IMAGE", filter_used="F1800W")
+    save_input = input_model.copy()
+    ds = photom.DataSet(input_model, apply_time_correction=False)
+    ftab = create_photom_miri_image()
+    ds.calc_miri(ftab)
+
+    input_data = save_input.data
+    output = ds.input.data  # ds.input is the output
+    rownum = find_row_in_ftab(save_input, ftab, ["filter"], slitname=None, order=None)
+    photmjsr = ftab.phot_table["photmjsr"][rownum]
+
+    shape = input_data.shape
+    ix = shape[1] // 2
+    iy = shape[0] // 2
+
+    # Time correction is not applied, so comparison value is just
+    # the conversion factor, even though timecoeff extensions
+    # are present.
+    compare = photmjsr
+
     # Compare the values at the center pixel.
     ratio = output[iy, ix] / input_data[iy, ix]
     assert_allclose(ratio, compare, rtol=1.0e-7)
@@ -1714,6 +1898,35 @@ def test_nircam_spec():
         assert_allclose(ratio, compare, rtol=1.0e-7)
 
 
+def test_unit_handling_no_expected_unit(log_watcher):
+    """Test catch for phot_unit specified but no expected_unit defined."""
+    input_model = create_input(
+        "NIRCAM", "NRCALONG", "NRC_WFSS", filter_used="F356W", pupil="GRISMR"
+    )
+    input_model.meta.exposure.type = "NRC_IMAGE"
+    ds = photom.DataSet(input_model)
+    ftab = create_photom_nircam_wfss(min_wl=2.4, max_wl=5.0, min_r=8.0, max_r=9.0)
+    watcher = log_watcher(
+        "jwst.photom.photom",
+        message="phot_unit attribute found (placeholder), but no expected unit defined",
+        level="warning",
+    )
+    ds.photom_io(ftab.phot_table[0], phot_unit="placeholder")
+    watcher.assert_seen()
+
+
+def test_unit_handling_phot_unit_not_astropy():
+    """Test phot_unit specified but not an astropy unit raises an exception within Astropy."""
+    input_model = create_input(
+        "NIRCAM", "NRCALONG", "NRC_WFSS", filter_used="F356W", pupil="GRISMR"
+    )
+    ds = photom.DataSet(input_model)
+    ftab = create_photom_nircam_wfss(min_wl=2.4, max_wl=5.0, min_r=8.0, max_r=9.0)
+    ftab.phot_unit = "not_a_unit"
+    with pytest.raises(ValueError, match="did not parse as unit"):
+        ds.calc_nircam(ftab)
+
+
 def test_fgs():
     """Test the calc_fgs method of the DataSet class in photom.py."""
     input_model = create_input("FGS", "GUIDER1", "FGS_IMAGE")
@@ -1747,7 +1960,7 @@ def test_apply_photom_1():
     is checking that the pixel area keywords are populated correctly.
     """
     input_model = create_input("NIRCAM", "NRCA3", "NRC_IMAGE", filter_used="F150W", pupil="CLEAR")
-    ds = photom.DataSet(input_model)
+    ds = photom.DataSet(input_model.copy())
     ftab = create_photom_nircam_image()
 
     area_ster = 2.31307642258977e-14
@@ -1839,7 +2052,7 @@ def test_apply_photom_2(srctype):
     relresponse = ftab.phot_table["relresponse"][rownum][0:nelem]
 
     # Recover original input before photom step.
-    ds2 = photom.DataSet(output_model, inverse=True)
+    ds2 = photom.DataSet(output_model.copy(), inverse=True)
     rt_model = ds2.apply_photom(ftab, area_ref)
     for k, slit in enumerate(save_input.slits):
         assert_allclose(rt_model.slits[k].data, slit.data, rtol=1e-4)
@@ -1881,3 +2094,59 @@ def test_find_row():
 
     ind = photom.find_row(ftab.phot_table, {"filter": "F444W", "pupil": "GRISMR", "order": 2})
     assert ind is None
+
+
+def test_invalid_photom_file_missing_meta():
+    ftab = create_photom_miri_image()
+    input_model = create_input("MIRI", "MIRIMAGE", "MIR_IMAGE", filter_used="F1800W")
+    ds = photom.DataSet(input_model)
+
+    # With required values, apply_photom succeeds
+    ds.apply_photom(ftab, None)
+
+    # Error is raised if created model does not have required
+    # metadata (description, pedigree, etc.)
+    ftab.meta.description = None
+    with pytest.raises(ValueError, match="Model.meta is missing values"):
+        ds.apply_photom(ftab, None)
+
+
+def test_invalid_photom_file_bad_timecoeff_order():
+    # Modify the created model to introduce a mismatch between the photom table
+    # and the timecoeff table row order
+    ftab = create_photom_miri_image()
+    ftab.timecoeff_exponential = ftab.timecoeff_exponential[::-1]
+
+    input_model = create_input("MIRI", "MIRIMAGE", "MIR_IMAGE", filter_used="F1800W")
+    ds = photom.DataSet(input_model)
+    with pytest.raises(
+        ValueError, match="Model.phot_table and Model.timecoeff_exponential do not match"
+    ):
+        ds.apply_photom(ftab, None)
+
+
+def test_invalid_photom_file_bad_timecoeff_length():
+    # Modify the created model to introduce a mismatch between the photom table
+    # and the timecoeff table length
+    ftab = create_photom_miri_image()
+    ftab.timecoeff_exponential = ftab.timecoeff_exponential[:-1]
+
+    input_model = create_input("MIRI", "MIRIMAGE", "MIR_IMAGE", filter_used="F1800W")
+    ds = photom.DataSet(input_model)
+    with pytest.raises(
+        ValueError, match="Model.phot_table and Model.timecoeff_exponential do not match"
+    ):
+        ds.apply_photom(ftab, None)
+
+
+def test_invalid_photom_file_empty_timecoeff_table():
+    # Auto-generate an empty extension in the photom model by trying to access it
+    ftab = create_photom_miri_image()
+    ftab.timecoeff_linear = ftab.get_default("timecoeff_linear")
+
+    input_model = create_input("MIRI", "MIRIMAGE", "MIR_IMAGE", filter_used="F1800W")
+    ds = photom.DataSet(input_model)
+    with pytest.raises(
+        ValueError, match="Model.phot_table and Model.timecoeff_linear do not match"
+    ):
+        ds.apply_photom(ftab, None)

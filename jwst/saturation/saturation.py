@@ -64,9 +64,9 @@ def flag_saturation(output_model, ref_model, n_pix_grow_sat, use_readpatt, bias_
     else:
         log.info("Extracting reference file subarray to match science data")
         ref_sub_model = reffile_utils.get_subarray_model(output_model, ref_model)
-        sat_thresh = ref_sub_model.data.copy()
-        sat_dq = ref_sub_model.dq.copy()
-        ref_sub_model.close()
+        sat_thresh = ref_sub_model.data
+        sat_dq = ref_sub_model.dq
+        del ref_sub_model
 
     # Enable use of read_pattern specific treatment if selected
     if use_readpatt:
@@ -81,6 +81,20 @@ def flag_saturation(output_model, ref_model, n_pix_grow_sat, use_readpatt, bias_
     if bias_model is not None:
         # Obtain the bias data, used for group 2 saturation flagging in frame-averaged groups
         bias = bias_model.data
+
+    num_superstripe = getattr(output_model.meta.subarray, "num_superstripe", None)
+    if num_superstripe is not None and num_superstripe > 0:
+        # Expand ref arrays to 4-D for ease of slicing
+        int_repeats = data.shape[0] // num_superstripe
+        if bias is not None:
+            bias = bias[:, np.newaxis, :, :].repeat(ngroups, axis=1)
+            bias = np.tile(bias, reps=(int_repeats, 1, 1, 1))
+        sat_dq = sat_dq[:, np.newaxis, :, :].repeat(ngroups, axis=1)
+        sat_dq = np.tile(sat_dq, reps=(int_repeats, 1, 1, 1))
+        sat_thresh = sat_thresh[:, np.newaxis, :, :].repeat(ngroups, axis=1)
+        sat_thresh = np.tile(sat_thresh, reps=(int_repeats, 1, 1, 1))
+        pdq = pdq[:, np.newaxis, :, :].repeat(ngroups, axis=1)
+        pdq = np.tile(pdq, reps=(int_repeats, 1, 1, 1))
 
     gdq_new, pdq_new, zframe = flag_saturated_pixels(
         data,
@@ -100,7 +114,11 @@ def flag_saturation(output_model, ref_model, n_pix_grow_sat, use_readpatt, bias_
     output_model.groupdq = gdq_new
 
     # Save the NO_SAT_CHECK flags in the output PIXELDQ array
-    output_model.pixeldq = pdq_new
+    if num_superstripe is not None and num_superstripe > 0:
+        # Reformat the pixeldq back to (nstripe, ny, nx)
+        output_model.pixeldq = pdq_new[:num_superstripe, 0].squeeze()
+    else:
+        output_model.pixeldq = pdq_new
 
     if zframe is not None:
         output_model.zeroframe = zframe
@@ -142,7 +160,7 @@ def irs2_flag_saturation(output_model, ref_model, n_pix_grow_sat, use_readpatt, 
         Data model with saturation, A/D floor, and do not use flags set in
         the GROUPDQ array
     """
-    # Create the output model as a copy of the input
+    # Get the DQ array from the output model.  It will be updated in place.
     groupdq = output_model.groupdq
 
     data = output_model.data
@@ -167,11 +185,14 @@ def irs2_flag_saturation(output_model, ref_model, n_pix_grow_sat, use_readpatt, 
         sat_thresh = ref_model.data
         sat_dq = ref_model.dq
     else:
+        # Note: this code is not currently used, since we don't
+        # take IRS2 data in subarray mode. Leaving it here, in case that
+        # changes in the future.
         log.info("Extracting reference file subarray to match science data")
         ref_sub_model = reffile_utils.get_subarray_model(output_model, ref_model)
-        sat_thresh = ref_sub_model.data.copy()
-        sat_dq = ref_sub_model.dq.copy()
-        ref_sub_model.close()
+        sat_thresh = ref_sub_model.data
+        sat_dq = ref_sub_model.dq
+        del ref_sub_model
 
     bias = 0.0
     if bias_model is not None:

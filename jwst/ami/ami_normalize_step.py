@@ -21,19 +21,19 @@ class AmiNormalizeStep(Step):
 
         Parameters
         ----------
-        target : str or model
-            Target input
-        reference : str or model
-            Reference input
+        target : str or `~stdatamodels.jwst.datamodels.AmiOIModel`
+            Target input file name or datamodel.
+        reference : str or `~stdatamodels.jwst.datamodels.AmiOIModel`
+            Reference input file name or datamodel.
 
         Returns
         -------
-        result : AmiOIModel object
+        result : `~stdatamodels.jwst.datamodels.AmiOIModel`
             AMI data model that's been normalized
         """
         # Open the target and reference input models
-        target_model = datamodels.AmiOIModel(target)
-        reference_model = datamodels.AmiOIModel(reference)
+        target_model = self.prepare_output(target, open_as_type=datamodels.AmiOIModel)
+        reference_model = self.prepare_output(reference, open_as_type=datamodels.AmiOIModel)
 
         # Call the normalization routine
         result = ami_normalize.normalize_lg(target_model, reference_model)
@@ -41,8 +41,10 @@ class AmiNormalizeStep(Step):
         result.meta.cal_step.ami_normalize = "COMPLETE"
 
         # Close the input models
-        target_model.close()
-        reference_model.close()
+        if target_model is not target:
+            target_model.close()
+        if reference_model is not reference:
+            reference_model.close()
 
         # We're done
         return result

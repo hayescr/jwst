@@ -11,7 +11,6 @@ For Users
 
    user_step.rst
    user_pipeline.rst
-   user_logging.rst
    config_asdf.rst
    config_cfg.rst
    call_via_call.rst
@@ -31,6 +30,4 @@ For Developers
    devel_pipeline.rst
    devel_logging.rst
    devel_io_design.rst
-
-.. automodapi:: jwst.stpipe
-
+   api_ref.rst

@@ -17,7 +17,7 @@ from stcal.resample.utils import build_mask as _stcal_build_mask
 from stcal.resample.utils import compute_mean_pixel_area
 from stdatamodels.jwst.datamodels.dqflags import pixel
 
-__all__ = ["build_mask", "resampled_wcs_from_models"]
+__all__ = ["build_mask", "resampled_wcs_from_models", "multi_sregion_to_list"]
 
 log = logging.getLogger(__name__)
 
@@ -36,8 +36,8 @@ def resampled_wcs_from_models(
 
     Parameters
     ----------
-    input_models : `~jwst.datamodel.ModelLibrary`
-        Each datamodel must have a ``model.meta.wcs`` set to a ~gwcs.WCS object.
+    input_models : `~jwst.datamodels.library.ModelLibrary`
+        Each datamodel must have a ``model.meta.wcs`` set to a `~gwcs.wcs.WCS` object.
     pixel_scale_ratio : float, optional
         Desired pixel scale ratio defined as the ratio of the desired output
         pixel scale to the first input model's pixel scale computed from this
@@ -70,7 +70,7 @@ def resampled_wcs_from_models(
 
     Returns
     -------
-    wcs : ~gwcs.wcs.WCS
+    wcs : `~gwcs.wcs.WCS`
         The WCS object corresponding to the combined input footprints.
     pscale_in : float
         Computed pixel scale (in degrees) of the first input image.
@@ -94,7 +94,10 @@ def resampled_wcs_from_models(
         # get s_regions from model meta without loading the whole models into memory
         for i in range(len(input_models)):
             meta = input_models.read_metadata(i)
-            sregion_list.append(meta["meta.wcsinfo.s_region"])
+            sreg_string = meta["meta.wcsinfo.s_region"]
+            # In some cases S_REGION contains multiple polygons.
+            # The helper function handles this
+            sregion_list.extend(multi_sregion_to_list(sreg_string))
 
     if not sregion_list:
         raise ValueError("No input models.")
@@ -153,26 +156,6 @@ def build_mask(dqarr, bitvalue):
         Bit mask, where 1 is good and 0 is bad.
     """
     return _stcal_build_mask(dqarr=dqarr, good_bits=bitvalue, flag_name_map=pixel)
-
-
-def is_sky_like(frame):
-    """
-    Check that a frame is a sky-like frame by looking at its output units.
-
-    If output units are either ``deg`` or ``arcsec`` the frame is considered
-    a sky-like frame (as opposite to, e.g., a Cartesian frame.)
-
-    Parameters
-    ----------
-    frame : gwcs.WCS
-        WCS object to check.
-
-    Returns
-    -------
-    bool
-        ``True`` if the frame is sky-like, ``False`` otherwise.
-    """
-    return u.Unit("deg") in frame.unit or u.Unit("arcsec") in frame.unit
 
 
 def load_custom_wcs(asdf_wcs_file, output_shape=None):
@@ -251,7 +234,7 @@ def find_miri_lrs_sregion(sregion_model1, wcs):
     ----------
     sregion_model1 : str
         The s_regions of the first input model
-    wcs : gwcs.WCS
+    wcs : gwcs.wcs.WCS
         Spatial/spectral WCS.
 
     Returns
@@ -327,3 +310,21 @@ def find_miri_lrs_sregion(sregion_model1, wcs):
     footprint = np.array(footprint)
     s_region = compute_s_region_keyword(footprint)
     return s_region
+
+
+def multi_sregion_to_list(sregion):
+    """
+    Convert a multi S_REGION string to a list of individual S_REGION strings.
+
+    Parameters
+    ----------
+    sregion : str
+        A multi S_REGION string.
+
+    Returns
+    -------
+    list of str
+        A list of individual S_REGION strings.
+    """
+    slist = sregion.split("POLYGON ICRS")
+    return ["POLYGON ICRS " + s for s in map(str.strip, slist) if s]

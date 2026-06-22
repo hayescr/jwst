@@ -1,25 +1,17 @@
 import logging
-import os
 from os.path import abspath
 
-import asdf
 import pytest
-from astropy.extern.configobj.configobj import ConfigObj
 from astropy.utils.data import get_pkg_data_filename
-from crds.core.exceptions import CrdsLookupError
 from stdatamodels.jwst import datamodels
-from stpipe import crds_client
-from stpipe.config import StepConfig
 from stpipe.config_parser import ValidationError
 
 from jwst import __version__ as jwst_version
 from jwst.datamodels import ModelContainer, ModelLibrary
-from jwst.stpipe import Step
+from jwst.stpipe import Pipeline, Step
 from jwst.stpipe.tests.steps import (
     AnotherDummyStep,
     EmptyPipeline,
-    MakeListPipeline,
-    MakeListStep,
     OptionalRefTypeStep,
     ProperPipeline,
     SavePipeline,
@@ -38,7 +30,6 @@ WHITELIGHTSTEP_CRDS_MIRI_PARS = {
 CRDS_ERROR_STRING = "PARS-WITHDEFAULTSSTEP: No parameters found"
 
 
-@pytest.mark.filterwarnings("ignore::ResourceWarning")
 @pytest.mark.parametrize(
     "arg, env_set, expected_fn",
     [
@@ -90,7 +81,6 @@ def test_parameters_from_crds_filename(monkeypatch):
     assert pars == WHITELIGHTSTEP_CRDS_MIRI_PARS
 
 
-@pytest.mark.filterwarnings("ignore::ResourceWarning")
 @pytest.mark.parametrize("on_disk_status", [None, True, False])
 def test_parameters_from_crds_association(on_disk_status, monkeypatch):
     """
@@ -113,13 +103,16 @@ def test_parameters_from_crds_association(on_disk_status, monkeypatch):
         "data/single_member_miri_asn.json", package="jwst.stpipe.tests"
     )
 
-    data = single_member_asn
     if on_disk_status is not None:
         with ModelLibrary(single_member_asn, on_disk=on_disk_status) as model_library:
-            data = model_library
+            pars = WhiteLightStep.get_config_from_reference(model_library)
+    else:
+        pars = WhiteLightStep.get_config_from_reference(single_member_asn)
 
-    pars = WhiteLightStep.get_config_from_reference(data)
     assert pars == WHITELIGHTSTEP_CRDS_MIRI_PARS
+
+    if on_disk_status is True:
+        model_library._temp_dir.cleanup()  # avoid ResourceWarning
 
 
 @pytest.mark.parametrize("is_list", [True, False])
@@ -133,6 +126,9 @@ def test_parameters_from_crds_listlike(is_list):
         data = data._models
     pars = WhiteLightStep.get_config_from_reference(data)
     assert pars == WHITELIGHTSTEP_CRDS_MIRI_PARS
+
+    for model in data:
+        model.close()
 
 
 @pytest.mark.parametrize("is_list", [True, False])
@@ -160,214 +156,6 @@ def test_parameters_from_crds_bad_meta():
         data.meta.instrument.name = "NIRSPEC"
         pars = WhiteLightStep.get_config_from_reference(data)
     assert not len(pars)
-
-
-@pytest.mark.parametrize(
-    "cfg_file, expected_reftype",
-    [
-        ("local_class.cfg", "pars-dummystep"),
-        ("jwst_generic_pars-makeliststep_0002.asdf", "pars-makeliststep"),
-    ],
-)
-def test_reftype(cfg_file, expected_reftype):
-    """Test that reftype is produced as expected"""
-    step = Step.from_config_file(
-        get_pkg_data_filename(f"steps/{cfg_file}", package="jwst.stpipe.tests")
-    )
-    assert step.__class__.get_config_reftype() == expected_reftype
-    assert step.get_config_reftype() == expected_reftype
-
-
-def test_saving_pars(tmp_path):
-    """Save the step parameters from the commandline"""
-    cfg_path = get_pkg_data_filename(
-        "steps/jwst_generic_pars-makeliststep_0002.asdf", package="jwst.stpipe.tests"
-    )
-    saved_path = str(tmp_path / "savepars.asdf")
-    Step.from_cmdline([cfg_path, "--save-parameters", str(saved_path)])
-    assert os.path.exists(saved_path)
-
-    with asdf.open(
-        get_pkg_data_filename(
-            "steps/jwst_generic_pars-makeliststep_0002.asdf", package="jwst.stpipe.tests"
-        )
-    ) as af:
-        original_config = StepConfig.from_asdf(af)
-        original_config.parameters["par3"] = False
-
-    with asdf.open(str(saved_path)) as af:
-        config = StepConfig.from_asdf(af)
-        assert config.parameters == original_config.parameters
-
-
-@pytest.mark.parametrize(
-    "step_obj, expected",
-    [
-        (
-            MakeListStep(par1=0.0, par2="from args"),
-            StepConfig(
-                "jwst.stpipe.tests.steps.MakeListStep",
-                "MakeListStep",
-                {
-                    "pre_hooks": [],
-                    "post_hooks": [],
-                    "output_ext": ".fits",
-                    "output_use_model": False,
-                    "output_use_index": True,
-                    "save_results": False,
-                    "skip": False,
-                    "search_output_file": True,
-                    "input_dir": "",
-                    "par1": 0.0,
-                    "par2": "from args",
-                    "par3": False,
-                },
-                [],
-            ),
-        ),
-    ],
-)
-def test_export_config(step_obj, expected, tmp_path):
-    """Test retrieving of configuration parameters"""
-    config_path = tmp_path / "config.asdf"
-    step_obj.export_config(config_path)
-
-    with asdf.open(config_path) as af:
-        # StepConfig has an __eq__ implementation but we can't use it
-        # due to differences between asdf 2.7 and 2.8 in serializing None
-        # values.  This can be simplified once the minimum asdf requirement
-        # is changed to >= 2.8.
-        # assert StepConfig.from_asdf(af) == expected
-        config = StepConfig.from_asdf(af)
-        assert config.class_name == expected.class_name
-        assert config.name == expected.name
-        assert config.steps == expected.steps
-        parameters = set(expected.parameters.keys()).union(set(config.parameters.keys()))
-        for parameter in parameters:
-            assert config.parameters.get(parameter) == expected.parameters.get(parameter)
-
-
-@pytest.mark.parametrize(
-    "step_obj, full_spec, expected",
-    [
-        # #############################################
-        # Test with `full_spec = True`
-        # #############################################
-        # Mix of required and optional parameters
-        (
-            MakeListStep(par1=0.0, par2="from args"),
-            True,
-            {
-                "pre_hooks": [],
-                "post_hooks": [],
-                "output_file": None,
-                "output_dir": None,
-                "output_ext": ".fits",
-                "output_use_model": False,
-                "output_use_index": True,
-                "save_results": False,
-                "skip": False,
-                "suffix": None,
-                "search_output_file": True,
-                "input_dir": "",
-                "par1": 0.0,
-                "par2": "from args",
-                "par3": False,
-            },
-        ),
-        #
-        # All parameters set
-        #
-        (
-            MakeListPipeline(
-                par1="Instantiated", steps={"make_list": {"par1": 0.0, "par2": "sub-instantiated"}}
-            ),
-            True,
-            {
-                "pre_hooks": [],
-                "post_hooks": [],
-                "output_file": None,
-                "output_dir": None,
-                "output_ext": ".fits",
-                "output_use_model": False,
-                "output_use_index": True,
-                "save_results": False,
-                "skip": False,
-                "suffix": None,
-                "search_output_file": True,
-                "input_dir": "",
-                "par1": "Instantiated",
-                "steps": {
-                    "make_list": {
-                        "pre_hooks": [],
-                        "post_hooks": [],
-                        "output_file": None,
-                        "output_dir": None,
-                        "output_ext": ".fits",
-                        "output_use_model": False,
-                        "output_use_index": True,
-                        "save_results": False,
-                        "skip": False,
-                        "suffix": None,
-                        "search_output_file": True,
-                        "input_dir": "",
-                        "par1": 0.0,
-                        "par2": "sub-instantiated",
-                        "par3": False,
-                    }
-                },
-            },
-        ),
-        #
-        # Pipeline without any sub-steps
-        #
-        (
-            EmptyPipeline(par1="Instantiated"),
-            True,
-            {
-                "pre_hooks": [],
-                "post_hooks": [],
-                "output_file": None,
-                "output_dir": None,
-                "output_ext": ".fits",
-                "output_use_model": False,
-                "output_use_index": True,
-                "save_results": False,
-                "skip": False,
-                "suffix": None,
-                "search_output_file": True,
-                "input_dir": "",
-                "par1": "Instantiated",
-                "steps": {},
-            },
-        ),
-        # ######################################
-        # Test with `full_spec=False`
-        # ######################################
-        # Mix of required and optional parameters
-        (
-            MakeListStep(par1=0.0, par2="from args"),
-            False,
-            {"par1": 0.0, "par2": "from args", "par3": False},
-        ),
-        # Pipeline with all parameters set
-        (
-            MakeListPipeline(
-                par1="Instantiated", steps={"make_list": {"par1": 0.0, "par2": "sub-instantiated"}}
-            ),
-            False,
-            {
-                "par1": "Instantiated",
-                "steps": {"make_list": {"par1": 0.0, "par2": "sub-instantiated", "par3": False}},
-            },
-        ),
-        # Pipeline without any sub-steps
-        (EmptyPipeline(par1="Instantiated"), False, {"par1": "Instantiated", "steps": {}}),
-    ],
-)
-def test_getpars(step_obj, full_spec, expected):
-    """Test retrieving of configuration parameters"""
-    assert step_obj.get_pars(full_spec=full_spec) == expected
 
 
 def test_hook():
@@ -519,183 +307,6 @@ def test_step_from_commandline_invalid4():
         Step.from_cmdline(args)
 
 
-@pytest.mark.parametrize(
-    "command_line_pars, command_line_config_pars, reference_pars, expected_pars",
-    [
-        # If nothing else is present, we should use the spec defaults
-        (
-            None,
-            None,
-            None,
-            {
-                "par1": "default par1 value",
-                "par2": "default par2 value",
-                "par3": "default par3 value",
-                "par4": "default par4 value",
-            },
-        ),
-        # Reference file pars > spec defaults
-        (
-            None,
-            None,
-            {
-                "par1": "reference par1 value",
-                "par2": "reference par2 value",
-                "par3": "reference par3 value",
-                "par4": "reference par4 value",
-            },
-            {
-                "par1": "reference par1 value",
-                "par2": "reference par2 value",
-                "par3": "reference par3 value",
-                "par4": "reference par4 value",
-            },
-        ),
-        # Command line config pars > reference pars
-        (
-            None,
-            {
-                "par1": "config par1 value",
-                "par2": "config par2 value",
-                "par3": "config par3 value",
-                "par4": "config par4 value",
-            },
-            {
-                "par1": "reference par1 value",
-                "par2": "reference par2 value",
-                "par3": "reference par3 value",
-                "par4": "reference par4 value",
-            },
-            {
-                "par1": "config par1 value",
-                "par2": "config par2 value",
-                "par3": "config par3 value",
-                "par4": "config par4 value",
-            },
-        ),
-        # Command line override pars > all other pars
-        (
-            {
-                "par1": "override par1 value",
-                "par2": "override par2 value",
-                "par3": "override par3 value",
-                "par4": "override par4 value",
-            },
-            {
-                "par1": "config par1 value",
-                "par2": "config par2 value",
-                "par3": "config par3 value",
-                "par4": "config par4 value",
-            },
-            {
-                "par1": "reference par1 value",
-                "par2": "reference par2 value",
-                "par3": "reference par3 value",
-                "par4": "reference par4 value",
-            },
-            {
-                "par1": "override par1 value",
-                "par2": "override par2 value",
-                "par3": "override par3 value",
-                "par4": "override par4 value",
-            },
-        ),
-        # Test complex merging of parameters (one parameter per source)
-        (
-            {"par1": "override par1 value"},
-            {"par2": "config par2 value"},
-            {"par3": "reference par3 value"},
-            {
-                "par1": "override par1 value",
-                "par2": "config par2 value",
-                "par3": "reference par3 value",
-                "par4": "default par4 value",
-            },
-        ),
-        # Test complex merging of parameters (more parameters specified on the lower-precedence sources)
-        (
-            {"par1": "override par1 value"},
-            {"par1": "config par1 value", "par2": "config par2 value"},
-            {
-                "par1": "reference par1 value",
-                "par2": "reference par2 value",
-                "par3": "reference par3 value",
-            },
-            {
-                "par1": "override par1 value",
-                "par2": "config par2 value",
-                "par3": "reference par3 value",
-                "par4": "default par4 value",
-            },
-        ),
-    ],
-)
-def test_step_from_commandline_par_precedence(
-    command_line_pars,
-    command_line_config_pars,
-    reference_pars,
-    expected_pars,
-    tmp_path,
-    monkeypatch,
-):
-    args = []
-
-    class_name = "jwst.stpipe.tests.steps.WithDefaultsStep"
-    config_name = "WithDefaultsStep"
-    reference_type = f"pars-{config_name.lower()}"
-    input_path = get_pkg_data_filename("data/science.fits", package="jwst.stpipe.tests")
-
-    if command_line_config_pars:
-        command_line_config_path = tmp_path / "with_defaults_step.cfg"
-        config = ConfigObj(str(command_line_config_path))
-        config["class"] = class_name
-        config["name"] = config_name
-        for key, value in command_line_config_pars.items():
-            config[key] = value
-        config.write()
-        args.append(str(command_line_config_path.absolute()))
-    else:
-        args.append(class_name)
-
-    args.append(input_path)
-
-    if command_line_pars:
-        for key, value in command_line_pars.items():
-            args.append(f"--{key}={value}")
-
-    reference_file_map = {}
-    if reference_pars:
-        reference_path = tmp_path / f"{reference_type}.asdf"
-        reference_config = StepConfig(class_name, config_name, reference_pars, [])
-        with reference_config.to_asdf() as af:
-            af.write_to(reference_path)
-
-        reference_file_map[reference_type] = str(reference_path)
-
-    def mock_get_reference_file(dataset, reference_file_type, observatory=None, asn_exptypes=None):
-        if reference_file_type in reference_file_map:
-            return reference_file_map[reference_file_type]
-        else:
-            raise CrdsLookupError(
-                f"Error determining best reference for '{reference_file_type}'  = \
-  Unknown reference type '{reference_file_type}'"
-            )
-
-    monkeypatch.setattr(crds_client, "get_reference_file", mock_get_reference_file)
-
-    step = Step.from_cmdline(args)
-
-    for key, value in expected_pars.items():
-        assert getattr(step, key) == value
-
-
-def test_step_with_local_class():
-    step_fn = get_pkg_data_filename("steps/local_class.cfg", package="jwst.stpipe.tests")
-    step = Step.from_config_file(step_fn)
-
-    step.run(datamodels.ImageModel((2, 2)))
-
-
 def test_extra_parameter():
     with pytest.raises(ValidationError):
         AnotherDummyStep("SomeOtherStepOriginal", par5="foo")
@@ -707,7 +318,7 @@ def test_crds_override():
         "SomeOtherStepOriginal", par1=42.0, par2="abc def", override_flat_field=ff_name
     )
 
-    fd = step.get_reference_file(datamodels.open(), "flat_field")
+    fd = step.get_reference_file(datamodels.JwstDataModel(), "flat_field")
     assert fd == ff_name
 
 
@@ -758,7 +369,88 @@ def test_finalize_logging(monkeypatch):
     assert watcher.seen
 
 
-def test_dunder_call_error():
-    pipeline = EmptyPipeline()
-    with pytest.raises(TypeError, match="not callable"):
-        pipeline(None)
+def test_add_asn_id_to_output_name_from_step():
+    asn_id_step = "1234"
+
+    # Bare step and model, no ASN ID set yet
+    step = Step()
+    model = datamodels.ImageModel()
+
+    # No ASN ID in the default output path
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == "test_cal.fits"
+
+    # If input has no ASN ID, the path is unmodified
+    found_asn_id = step.add_asn_id_to_output_name(model)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == "test_cal.fits"
+    assert found_asn_id is None
+
+    # Add the ASN ID to the step attributes: it appears in the output name
+    step.asn_id = asn_id_step
+    found_asn_id = step.add_asn_id_to_output_name(model)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == f"test_{asn_id_step}_cal.fits"
+    assert found_asn_id == asn_id_step
+
+    # Reset the ASN ID and update again: it no longer appears in the output name
+    step.asn_id = None
+    found_asn_id = step.add_asn_id_to_output_name(model)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == "test_cal.fits"
+    assert found_asn_id is None
+
+
+def test_add_asn_id_to_output_name_from_step_parent():
+    asn_id_step = "1234"
+    asn_id_parent = "2345"
+
+    # Bare step and model, parent has ASN ID set
+    pipe = Pipeline()
+    pipe.asn_id = asn_id_parent
+    step = Step(parent=pipe)
+    model = datamodels.ImageModel()
+
+    # Parent ASN ID appears in output name
+    found_asn_id = step.add_asn_id_to_output_name(model)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == f"test_{asn_id_parent}_cal.fits"
+    assert found_asn_id == asn_id_parent
+
+    # If the step has an asn_id defined, that overrides the parent
+    step.asn_id = asn_id_step
+    found_asn_id = step.add_asn_id_to_output_name(model)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == f"test_{asn_id_step}_cal.fits"
+    assert found_asn_id == asn_id_step
+
+
+@pytest.mark.parametrize("models", ["container", "library"])
+def test_add_asn_id_to_output_name_from_model(models):
+    asn_id_step = "1234"
+    asn_id_model = "2345"
+
+    # Make input models with ASN ID assigned
+    if models == "container":
+        input_models = ModelContainer()
+        input_models.asn_table["asn_id"] = asn_id_model
+    elif models == "library":
+        model = datamodels.ImageModel()
+        input_models = ModelLibrary([model])
+        input_models._asn["asn_id"] = asn_id_model
+
+    # Step with no asn_id attribute set
+    step = Step()
+
+    # Add the ASN ID from the model
+    found_asn_id = step.add_asn_id_to_output_name(input_models)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == f"test_{asn_id_model}_cal.fits"
+    assert found_asn_id == asn_id_model
+
+    # If the step has an asn_id, it still uses the one from the model
+    step.asn_id = asn_id_step
+    found_asn_id = step.add_asn_id_to_output_name(input_models)
+    output_name = step.make_output_path(basepath="test", suffix="cal")
+    assert output_name == f"test_{asn_id_model}_cal.fits"
+    assert found_asn_id == asn_id_model

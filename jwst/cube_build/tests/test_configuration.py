@@ -62,10 +62,10 @@ def miri_ifushort_short():
     """Generate a IFU image"""
 
     input_model = datamodels.IFUImageModel()
-    input_model.meta.wcsinfo._instance.update(wcsinfo)
-    input_model.meta.instrument._instance.update(mirifushort_short)
-    input_model.meta.observation._instance.update(observation)
-    input_model.meta.subarray._instance.update(subarray)
+    input_model.meta.wcsinfo.instance.update(wcsinfo)
+    input_model.meta.instrument.instance.update(mirifushort_short)
+    input_model.meta.observation.instance.update(observation)
+    input_model.meta.subarray.instance.update(subarray)
     input_model.meta.cal_step.assign_wcs = "COMPLETE"
     return input_model
 
@@ -75,45 +75,45 @@ def miri_full_coverage():
     """Generate a IFU images SHORT, LONG for all three bands"""
 
     input_model1 = datamodels.IFUImageModel()
-    input_model1.meta.wcsinfo._instance.update(wcsinfo)
-    input_model1.meta.instrument._instance.update(mirifushort_short)
-    input_model1.meta.observation._instance.update(observation)
-    input_model1.meta.subarray._instance.update(subarray)
+    input_model1.meta.wcsinfo.instance.update(wcsinfo)
+    input_model1.meta.instrument.instance.update(mirifushort_short)
+    input_model1.meta.observation.instance.update(observation)
+    input_model1.meta.subarray.instance.update(subarray)
     input_model1.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_model2 = datamodels.IFUImageModel()
-    input_model2.meta.wcsinfo._instance.update(wcsinfo)
-    input_model2.meta.instrument._instance.update(mirifushort_medium)
-    input_model2.meta.observation._instance.update(observation)
-    input_model2.meta.subarray._instance.update(subarray)
+    input_model2.meta.wcsinfo.instance.update(wcsinfo)
+    input_model2.meta.instrument.instance.update(mirifushort_medium)
+    input_model2.meta.observation.instance.update(observation)
+    input_model2.meta.subarray.instance.update(subarray)
     input_model2.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_model3 = datamodels.IFUImageModel()
-    input_model3.meta.wcsinfo._instance.update(wcsinfo)
-    input_model3.meta.instrument._instance.update(mirifushort_long)
-    input_model3.meta.observation._instance.update(observation)
-    input_model3.meta.subarray._instance.update(subarray)
+    input_model3.meta.wcsinfo.instance.update(wcsinfo)
+    input_model3.meta.instrument.instance.update(mirifushort_long)
+    input_model3.meta.observation.instance.update(observation)
+    input_model3.meta.subarray.instance.update(subarray)
     input_model3.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_model4 = datamodels.IFUImageModel()
-    input_model4.meta.wcsinfo._instance.update(wcsinfo)
-    input_model4.meta.instrument._instance.update(mirifulong_short)
-    input_model4.meta.observation._instance.update(observation)
-    input_model4.meta.subarray._instance.update(subarray)
+    input_model4.meta.wcsinfo.instance.update(wcsinfo)
+    input_model4.meta.instrument.instance.update(mirifulong_short)
+    input_model4.meta.observation.instance.update(observation)
+    input_model4.meta.subarray.instance.update(subarray)
     input_model4.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_model5 = datamodels.IFUImageModel()
-    input_model5.meta.wcsinfo._instance.update(wcsinfo)
-    input_model5.meta.instrument._instance.update(mirifulong_medium)
-    input_model5.meta.observation._instance.update(observation)
-    input_model5.meta.subarray._instance.update(subarray)
+    input_model5.meta.wcsinfo.instance.update(wcsinfo)
+    input_model5.meta.instrument.instance.update(mirifulong_medium)
+    input_model5.meta.observation.instance.update(observation)
+    input_model5.meta.subarray.instance.update(subarray)
     input_model5.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_model6 = datamodels.IFUImageModel()
-    input_model6.meta.wcsinfo._instance.update(wcsinfo)
-    input_model6.meta.instrument._instance.update(mirifulong_long)
-    input_model6.meta.observation._instance.update(observation)
-    input_model6.meta.subarray._instance.update(subarray)
+    input_model6.meta.wcsinfo.instance.update(wcsinfo)
+    input_model6.meta.instrument.instance.update(mirifulong_long)
+    input_model6.meta.observation.instance.update(observation)
+    input_model6.meta.subarray.instance.update(subarray)
     input_model6.meta.cal_step.assign_wcs = "COMPLETE"
 
     # full range and 2 dithers (12 files, 2 dithers of each band)
@@ -138,17 +138,17 @@ def nirspec_medium_coverage():
     """Generate a IFU images NIRSpec G140M, G235M"""
 
     input_model1 = datamodels.IFUImageModel()
-    input_model1.meta.wcsinfo._instance.update(wcsinfo)
-    input_model1.meta.instrument._instance.update(nirspec_G140M)
-    input_model1.meta.observation._instance.update(observation)
-    input_model1.meta.subarray._instance.update(subarray_nirspec)
+    input_model1.meta.wcsinfo.instance.update(wcsinfo)
+    input_model1.meta.instrument.instance.update(nirspec_G140M)
+    input_model1.meta.observation.instance.update(observation)
+    input_model1.meta.subarray.instance.update(subarray_nirspec)
     input_model1.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_model2 = datamodels.IFUImageModel()
-    input_model2.meta.wcsinfo._instance.update(wcsinfo)
-    input_model2.meta.instrument._instance.update(nirspec_G235M)
-    input_model2.meta.observation._instance.update(observation)
-    input_model2.meta.subarray._instance.update(subarray_nirspec)
+    input_model2.meta.wcsinfo.instance.update(wcsinfo)
+    input_model2.meta.instrument.instance.update(nirspec_G235M)
+    input_model2.meta.observation.instance.update(observation)
+    input_model2.meta.subarray.instance.update(subarray_nirspec)
     input_model2.meta.cal_step.assign_wcs = "COMPLETE"
 
     input_models = []
@@ -169,7 +169,6 @@ def test_calspec2_config(tmp_cwd, miri_ifushort_short):
     pars_input["grating"] = []
     weighting = "drizzle"
     output_type = "multi"  # calspec 2 setup. Only 1 cube create from 2 channels
-    single = False
     par_filename = "None"
 
     input_models = []
@@ -181,7 +180,6 @@ def test_calspec2_config(tmp_cwd, miri_ifushort_short):
         "grating": pars_input["grating"],
         "filter": pars_input["filter"],
         "weighting": weighting,
-        "single": single,
         "output_type": output_type,
     }
 
@@ -213,7 +211,6 @@ def test_calspec3_config_miri(tmp_cwd, miri_full_coverage):
     pars_input["grating"] = []
     weighting = "drizzle"
     output_type = "band"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -222,7 +219,6 @@ def test_calspec3_config_miri(tmp_cwd, miri_full_coverage):
         "grating": pars_input["grating"],
         "filter": pars_input["filter"],
         "weighting": weighting,
-        "single": single,
         "output_type": output_type,
     }
 
@@ -292,7 +288,6 @@ def test_calspec3_config_miri_multi(tmp_cwd, miri_full_coverage):
     pars_input["grating"] = []
     weighting = "drizzle"
     output_type = "multi"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -301,7 +296,6 @@ def test_calspec3_config_miri_multi(tmp_cwd, miri_full_coverage):
         "grating": pars_input["grating"],
         "filter": pars_input["filter"],
         "weighting": weighting,
-        "single": single,
         "output_type": output_type,
     }
 
@@ -361,7 +355,6 @@ def test_calspec3_config_miri_multi_ch1(tmp_cwd, miri_full_coverage):
     weighting = "drizzle"
     output_type = "multi"
     channel = "1"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -369,7 +362,6 @@ def test_calspec3_config_miri_multi_ch1(tmp_cwd, miri_full_coverage):
         "grating": pars_input["grating"],
         "filter": pars_input["filter"],
         "weighting": weighting,
-        "single": single,
         "channel": channel,
         "output_type": output_type,
     }
@@ -402,7 +394,6 @@ def test_calspec3_config_nirspec(tmp_cwd, nirspec_medium_coverage):
     pars_input["grating"] = []
     weighting = "drizzle"
     output_type = "band"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -411,7 +402,6 @@ def test_calspec3_config_nirspec(tmp_cwd, nirspec_medium_coverage):
         "grating": pars_input["grating"],
         "filter": pars_input["filter"],
         "weighting": weighting,
-        "single": single,
         "output_type": output_type,
     }
 
@@ -447,7 +437,6 @@ def test_calspec3_config_nirspec_multi(tmp_cwd, nirspec_medium_coverage):
     pars_input["grating"] = []
     weighting = "msm"
     output_type = "multi"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -456,7 +445,6 @@ def test_calspec3_config_nirspec_multi(tmp_cwd, nirspec_medium_coverage):
         "grating": pars_input["grating"],
         "filter": pars_input["filter"],
         "weighting": weighting,
-        "single": single,
         "output_type": output_type,
     }
 
@@ -491,7 +479,6 @@ def test_calspec3_config_nirspec_grating(tmp_cwd, nirspec_medium_coverage):
     grating = "g140m"
     filter = "f100lp"
     output_type = "multi"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -500,7 +487,6 @@ def test_calspec3_config_nirspec_grating(tmp_cwd, nirspec_medium_coverage):
         "weighting": weighting,
         "grating": grating,
         "filter": filter,
-        "single": single,
         "output_type": output_type,
     }
 
@@ -535,7 +521,6 @@ def test_calspec3_config_nirspec_no_grating(tmp_cwd, nirspec_medium_coverage):
     grating = "g140h"
     filter = "f100lp"
     output_type = "multi"
-    single = False
     par_filename = "None"
 
     pars = {
@@ -544,7 +529,6 @@ def test_calspec3_config_nirspec_no_grating(tmp_cwd, nirspec_medium_coverage):
         "weighting": weighting,
         "grating": grating,
         "filter": filter,
-        "single": single,
         "output_type": output_type,
     }
 

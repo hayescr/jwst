@@ -1,4 +1,5 @@
-#! /usr/bin/env python
+import logging
+
 from stdatamodels.jwst import datamodels
 
 from jwst.lib import pipe_utils, reffile_utils
@@ -7,9 +8,11 @@ from jwst.stpipe import Step
 
 __all__ = ["SaturationStep"]
 
+log = logging.getLogger(__name__)
+
 
 class SaturationStep(Step):
-    """Sets saturation flags."""
+    """Set saturation flags."""
 
     class_alias = "saturation"
 
@@ -26,56 +29,54 @@ class SaturationStep(Step):
 
         Parameters
         ----------
-        step_input : DataModel or str
+        step_input : `~stdatamodels.jwst.datamodels.RampModel` or str
             Input datamodel or string name of the fits file.
 
         Returns
         -------
-        result : DataModel
+        result : `~stdatamodels.jwst.datamodels.RampModel`
             Output datamodel with saturation flags set for saturated pixels.
         """
         # Open the input data model
-        with datamodels.open(step_input) as input_model:
-            # Get the name of the saturation reference file
-            self.ref_name = self.get_reference_file(input_model, "saturation")
-            self.bias_name = self.get_reference_file(input_model, "superbias")
-            self.log.info("Using SATURATION reference file %s", self.ref_name)
-            self.log.info("Using SUPERBIAS reference file %s", self.bias_name)
+        result = self.prepare_output(step_input, open_as_ramp=True)
 
-            # Check for a valid reference file
-            if self.ref_name == "N/A":
-                self.log.warning("No SATURATION reference file found")
-                self.log.warning("Saturation step will be skipped")
-                input_model.meta.cal_step.saturation = "SKIPPED"
-                return input_model
+        # Get the name of the saturation reference file
+        ref_name = self.get_reference_file(result, "saturation")
+        bias_name = self.get_reference_file(result, "superbias")
+        log.info("Using SATURATION reference file %s", ref_name)
+        log.info("Using SUPERBIAS reference file %s", bias_name)
 
-            # Open the reference file data model
-            ref_model = datamodels.SaturationModel(self.ref_name)
+        # Check for a valid reference file
+        if ref_name == "N/A":
+            log.warning("No SATURATION reference file found")
+            log.warning("Saturation step will be skipped")
+            result.meta.cal_step.saturation = "SKIPPED"
+            return result
 
-            # Open the superbias if one is available
-            bias_model = None
-            if self.bias_name != "N/A":
-                bias_model = datamodels.SuperBiasModel(self.bias_name)
-                # Check for subarray mode and extract subarray from the
-                # bias reference data if necessary
-                if not reffile_utils.ref_matches_sci(input_model, bias_model):
-                    bias_model = reffile_utils.get_subarray_model(input_model, bias_model)
+        # Open the reference file data model
+        ref_model = datamodels.SaturationModel(ref_name)
 
-            # Work on a copy
-            result = input_model.copy()
+        # Open the superbias if one is available
+        bias_model = None
+        if bias_name != "N/A":
+            bias_model = datamodels.SuperBiasModel(bias_name)
+            # Check for subarray mode and extract subarray from the
+            # bias reference data if necessary
+            if not reffile_utils.ref_matches_sci(result, bias_model):
+                bias_model = reffile_utils.get_subarray_model(result, bias_model)
 
-            # Do the saturation check
-            if pipe_utils.is_irs2(result):
-                result = saturation.irs2_flag_saturation(
-                    result, ref_model, self.n_pix_grow_sat, self.use_readpatt, bias_model=bias_model
-                )
-            else:
-                result = saturation.flag_saturation(
-                    result, ref_model, self.n_pix_grow_sat, self.use_readpatt, bias_model=bias_model
-                )
-            result.meta.cal_step.saturation = "COMPLETE"
+        # Do the saturation check
+        if pipe_utils.is_irs2(result):
+            result = saturation.irs2_flag_saturation(
+                result, ref_model, self.n_pix_grow_sat, self.use_readpatt, bias_model=bias_model
+            )
+        else:
+            result = saturation.flag_saturation(
+                result, ref_model, self.n_pix_grow_sat, self.use_readpatt, bias_model=bias_model
+            )
+        result.meta.cal_step.saturation = "COMPLETE"
 
-            # Cleanup
-            del ref_model
+        # Cleanup
+        del ref_model
 
         return result

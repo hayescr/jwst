@@ -15,13 +15,7 @@ __all__ = ["WhiteLightStep"]
 
 
 class WhiteLightStep(Step):
-    """
-    Sum the spectroscopic flux over all wavelengths in each integration.
-
-    Produce an integrated (“white”) flux as a function of time for the target. This
-    is to be applied to the _x1dints product in a spectroscopic
-    Time-Series Observation (TSO).
-    """
+    """Sum the spectroscopic flux over all wavelengths in each integration."""
 
     class_alias = "white_light"
 
@@ -34,35 +28,48 @@ class WhiteLightStep(Step):
 
     reference_file_types = ["wavelengthrange"]
 
-    def process(self, step_input):
+    def process(self, input_data):
         """
-        Sum the flux over all wavelengths in each integration as a function of time for the target.
+        Sum the flux over all wavelengths in each integration.
+
+        Produce an integrated (“white”) flux as a function of time for the target. This
+        is to be applied to the _x1dints product in a spectroscopic
+        Time-Series Observation (TSO).
 
         Parameters
         ----------
-        step_input : str or MultiSpecModel
+        input_data : str or `~stdatamodels.jwst.datamodels.MultiSpecModel`
             Either the path to the file or the science data model for the sum.
 
         Returns
         -------
-        result : astropy.table.table.QTable
+        result : `~astropy.table.table.QTable` or None
             Table containing the integrated flux as a function of time.
+            If input is invalid, None is returned.
         """
-        with datamodels.open(step_input) as input_model:
-            # load the wavelength range reference file
-            waverange_table = self._get_reference_wavelength_range(input_model)
-            # Call the white light curve generation routine
-            result = white_light(
-                input_model,
-                waverange_table=waverange_table,
-                min_wave=self.min_wavelength,
-                max_wave=self.max_wavelength,
-            )
+        # This step will not modify the input, so always skip making a copy
+        input_model = self.prepare_output(input_data, make_copy=False)
 
-            # Write the output catalog
-            if self.save_results:
-                output_path = self.make_output_path()
-                result.write(output_path, format="ascii.ecsv", overwrite=True)
+        # First check for valid input
+        if not input_model.hasattr("spec") or len(input_model.spec) == 0:
+            log.error("No valid input spectra found.")
+            return None
+
+        # Load the wavelength range reference file
+        waverange_table = self._get_reference_wavelength_range(input_model)
+
+        # Call the white light curve generation routine
+        result = white_light(
+            input_model,
+            waverange_table=waverange_table,
+            min_wave=self.min_wavelength,
+            max_wave=self.max_wavelength,
+        )
+
+        # Write the output catalog
+        if self.save_results:
+            output_path = self.make_output_path()
+            result.write(output_path, format="ascii.ecsv", overwrite=True)
 
         return result
 

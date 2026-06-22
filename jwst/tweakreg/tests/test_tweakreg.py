@@ -1,13 +1,10 @@
 import json
 import os
-from contextlib import nullcontext
-from copy import deepcopy
 
 import asdf
 import numpy as np
 import pytest
-from astropy.modeling.models import Shift
-from astropy.table import Table
+from astropy.table import QTable, Table
 from astropy.utils.data import get_pkg_data_filename
 from astropy.wcs import WCS
 from gwcs.wcstools import grid_from_bounding_box
@@ -24,10 +21,16 @@ N_EXAMPLE_SOURCES = 21
 N_CUSTOM_SOURCES = 15
 REFCAT = "GAIADR3"
 
+# The tweakreg catalog output always uses 'xcentroid'/'ycentroid',
+# but _rename_catalog_columns and user-supplied catalogs may use
+# either the old or new photutils column names.
+X_NAME = "x_centroid"
+Y_NAME = "y_centroid"
+
 
 @pytest.fixture
 def mock_source_catalog():
-    columns = ["id", "xcentroid", "ycentroid", "flux"]
+    columns = ["id", X_NAME, Y_NAME, "flux"]
     catalog = Table(names=columns, dtype=(int, float, float, float))
     catalog.add_row([1, 100.0, 100.0, 100.0])
 
@@ -37,9 +40,10 @@ def mock_source_catalog():
 @pytest.mark.parametrize("inplace", [True, False])
 def test_rename_catalog_columns(mock_source_catalog, inplace):
     """
-    Test that a catalog with 'xcentroid' and 'ycentroid' columns
-    passed to _renamed_catalog_columns successfully renames those columns
-    to 'x' and 'y' (and does so "inplace" modifying the input catalog)
+    Test that a catalog with 'x_centroid'/'xcentroid' and
+    'y_centroid'/'ycentroid' columns passed to _renamed_catalog_columns
+    successfully renames those columns to 'x' and 'y' (and does so
+    "inplace" modifying the input catalog)
     """
     renamed_catalog = tweakreg_step._rename_catalog_columns(mock_source_catalog)
 
@@ -49,18 +53,19 @@ def test_rename_catalog_columns(mock_source_catalog, inplace):
     else:
         catalog = renamed_catalog
 
-    assert "xcentroid" not in catalog.colnames
-    assert "ycentroid" not in catalog.colnames
+    assert X_NAME not in catalog.colnames
+    assert Y_NAME not in catalog.colnames
     assert "x" in catalog.colnames
     assert "y" in catalog.colnames
 
 
-@pytest.mark.parametrize("missing", ["x", "y", "xcentroid", "ycentroid"])
+@pytest.mark.parametrize("missing", ["x", "y", X_NAME, Y_NAME])
 def test_rename_catalog_columns_invalid(mock_source_catalog, missing):
     """
-    Test that passing a catalog that is missing either "x" or "y"
-    (or "xcentroid" and "ycentroid" which is renamed to "x" or "y")
-    results in an exception indicating that a required column is missing
+    Test that passing a catalog that is missing either "x" or "y" (or
+    "x_centroid"/"xcentroid" and "y_centroid"/"ycentroid" which is
+    renamed to "x" or "y") results in an exception indicating that a
+    required column is missing
     """
     # if the column we want to remove is not in the table, first run
     # rename to rename columns this should add the column we want to remove
@@ -69,51 +74,6 @@ def test_rename_catalog_columns_invalid(mock_source_catalog, missing):
     mock_source_catalog.remove_column(missing)
     with pytest.raises(ValueError, match="catalogs must contain"):
         tweakreg_step._rename_catalog_columns(mock_source_catalog)
-
-
-@pytest.mark.parametrize("offset, is_good", [(1 / 3600, True), (11 / 3600, False)])
-def test_is_wcs_correction_small(offset, is_good):
-    """
-    Test that the _is_wcs_correction_small method returns True for a small
-    wcs correction and False for a "large" wcs correction. The values in this
-    test are selected based on the current step default parameters:
-        - use2dhist
-        - searchrad
-        - tolerance
-    Changes to the defaults for these parameters will likely require updating the
-    values uses for parametrizing this test.
-    """
-    path = get_pkg_data_filename("data/mosaic_long_i2d_gwcs.asdf", package="jwst.tweakreg.tests")
-    with asdf.open(path) as af:
-        wcs = af.tree["wcs"]
-
-    # Make a copy and add an offset at the end of the transform
-    twcs = deepcopy(wcs)
-    step = twcs.pipeline[0]
-    step.transform = step.transform | Shift(offset) & Shift(offset)
-    twcs.bounding_box = wcs.bounding_box
-
-    step = tweakreg_step.TweakRegStep()
-
-    class FakeCorrector:
-        def __init__(self, wcs, original_skycoord):
-            self.wcs = wcs
-            self._original_skycoord = original_skycoord
-
-        @property
-        def meta(self):
-            return {"original_skycoord": self._original_skycoord}
-
-    correctors = [FakeCorrector(twcs, twk._wcs_to_skycoord(wcs))]
-
-    if not is_good:
-        ctx = pytest.warns(UserWarning, match="WCS has been tweaked by more than")
-    else:
-        ctx = nullcontext()
-
-    with ctx:
-        corr_result = twk._is_wcs_correction_small(correctors)
-    assert corr_result is is_good
 
 
 def test_expected_failure_bad_starfinder():
@@ -164,6 +124,7 @@ def example_input(example_wcs):
     point_source[3, 3] = 1.0
 
     m0.data[:] = BKG_LEVEL
+    m0.dq = m0.get_default("dq")
     n_sources = N_EXAMPLE_SOURCES  # a few more than default minobj
     rng = np.random.default_rng(26)
     xs = rng.choice(50, n_sources, replace=False) * 8 + 10
@@ -203,8 +164,13 @@ def test_tweakreg_step(example_input, with_shift):
 
     # check that step completed
     with result:
-        for model in result:
+        for model, input_model in zip(result, example_input, strict=True):
             assert model.meta.cal_step.tweakreg == "COMPLETE"
+
+            # Input model is not modified
+            assert model is not input_model
+            assert input_model.meta.cal_step.tweakreg is None
+
             result.shelve(model, modify=False)
 
         # and that the wcses differ by a small amount due to the shift above
@@ -235,10 +201,35 @@ def test_src_confusion_pars(example_input, alignment_type):
     step = tweakreg_step.TweakRegStep(**pars)
     result = step.run(example_input)
 
-    # check that step was skipped
+    # check that step was failed
     with result:
-        for model in result:
-            assert model.meta.cal_step.tweakreg == "SKIPPED"
+        for model, input_model in zip(result, example_input, strict=True):
+            assert model.meta.cal_step.tweakreg == "FAILED"
+
+            # Input model is not modified
+            assert model is not input_model
+            assert input_model.meta.cal_step.tweakreg is None
+
+            result.shelve(model)
+
+
+def test_ngroup_1(caplog, example_input):
+    example_input[0].meta.group_id = "a"
+    example_input[1].meta.group_id = "a"
+
+    # Input has the same group, so processing should be skipped
+    result = tweakreg_step.TweakRegStep.call(example_input)
+    assert "At least two exposures are required" in caplog.text
+
+    # check that step was failed
+    with result:
+        for model, input_model in zip(result, example_input, strict=True):
+            assert model.meta.cal_step.tweakreg == "FAILED"
+
+            # Input model is not modified
+            assert model is not input_model
+            assert input_model.meta.cal_step.tweakreg is None
+
             result.shelve(model)
 
 
@@ -286,8 +277,13 @@ def test_custom_catalog(
         - `use_custom_catalogs` (True/False)
         - a "valid" file passed as `catfile`
     """
+
     example_input[0].meta.group_id = "a"
     example_input[1].meta.group_id = "b"
+    name2group = {
+        example_input[0].meta.filename.split(".")[0]: "a",
+        example_input[1].meta.filename.split(".")[0]: "b",
+    }
 
     # this worked because if use_custom_catalogs was true but
     # catfile was blank tweakreg still uses custom catalogs
@@ -355,19 +351,30 @@ def test_custom_catalog(
 
     step = tweakreg_step.TweakRegStep(**kwargs)
 
-    # patch _construct_wcs_corrector to check the correct catalog was loaded
-    def patched_construct_wcs_corrector(wcs, wcsinfo, catalog, group_id, _seen=[]):
-        # we don't need to continue
-        if group_id == "a":
-            assert len(catalog) == n_custom_sources
-        elif group_id == "b":
-            assert len(catalog) == N_EXAMPLE_SOURCES
-        _seen.append(wcs)
+    def patched_xyxymatch_call(self, refcat, imcat, _seen=[], **kwargs):
+        # Check that the catalogs passed to xyxymatch are correct
+        catname = imcat.meta["name"]
+        grp_id = name2group[catname]
+        _seen.append(1)
+        if grp_id == "a":
+            assert len(imcat) == n_custom_sources
+        elif grp_id == "b":
+            assert len(imcat) == N_EXAMPLE_SOURCES
+
         if len(_seen) == 2:
             raise ValueError("done testing")
-        return None
 
-    monkeypatch.setattr(twk, "construct_wcs_corrector", patched_construct_wcs_corrector)
+        xyxymatch = twk.XYXYMatch(
+            use2dhist=step.use2dhist,
+            separation=step.separation,
+            tolerance=step.tolerance,
+            searchrad=step.searchrad,
+            xoffset=step.xoffset,
+            yoffset=step.yoffset,
+        )
+        return xyxymatch(refcat, imcat, **kwargs)
+
+    monkeypatch.setattr(twk.XYXYMatch, "__call__", patched_xyxymatch_call)
 
     with pytest.raises(ValueError, match="done testing"):
         step.run(str(asn_path))
@@ -498,7 +505,7 @@ def test_make_tweakreg_catalog_graceful_fail_no_sources(example_input, finder, l
 
     watcher.assert_seen()
     assert len(cat) == 0
-    assert type(cat) == Table
+    assert type(cat) == QTable
 
 
 def test_make_tweakreg_catalog_graceful_fail_bad_background(example_input, log_watcher):
@@ -514,4 +521,4 @@ def test_make_tweakreg_catalog_graceful_fail_bad_background(example_input, log_w
 
     watcher.assert_seen()
     assert len(cat) == 0
-    assert type(cat) == Table
+    assert type(cat) == QTable

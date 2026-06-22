@@ -1,10 +1,16 @@
+"""Perform dark current correction."""
+
+import logging
+
 import numpy as np
 from stcal.dark_current import dark_sub
 from stdatamodels.jwst import datamodels
 
 from jwst.stpipe import Step
 
-__all__ = ["DarkCurrentStep"]
+__all__ = ["DarkCurrentStep", "save_dark_data_as_dark_model", "dark_output_data_2_ramp_model"]
+
+log = logging.getLogger(__name__)
 
 
 class DarkCurrentStep(Step):
@@ -23,59 +29,59 @@ class DarkCurrentStep(Step):
         """
         Perform the dark current subtraction step.
 
+        Parameters
+        ----------
+        step_input : str or `~stdatamodels.jwst.datamodels.RampModel`
+            Filename or input datamodel to be corrected.
+
         Returns
         -------
         out_ramp : `~stdatamodels.jwst.datamodels.RampModel`
-            The science model with dark current subtracted form the data array.
+            The science model with dark current subtracted from the data array.
         """
         # Open the input data model
-        with datamodels.RampModel(step_input) as input_model:
-            # Get the name of the dark reference file to use
-            self.dark_name = self.get_reference_file(input_model, "dark")
-            self.log.info("Using DARK reference file %s", self.dark_name)
+        result = self.prepare_output(step_input, open_as_type=datamodels.RampModel)
 
-            # Check for a valid reference file
-            if self.dark_name == "N/A":
-                self.log.warning("No DARK reference file found")
-                self.log.warning("Dark current step will be skipped")
-                input_model.meta.cal_step.dark = "SKIPPED"
-                return input_model
+        # Get the name of the dark reference file to use
+        dark_name = self.get_reference_file(result, "dark")
+        log.info("Using DARK reference file %s", dark_name)
 
-            # Work on a copy
-            result = input_model.copy()
+        # Check for a valid reference file
+        if dark_name == "N/A":
+            log.warning("No DARK reference file found")
+            log.warning("Dark current step will be skipped")
+            result.meta.cal_step.dark_sub = "SKIPPED"
+            return result
 
-            # Create name for the intermediate dark, if desired.
-            dark_output = self.dark_output
-            if dark_output is not None:
-                dark_output = self.make_output_path(basepath=dark_output, suffix=False)
+        # Create name for the intermediate dark, if desired.
+        dark_output = self.dark_output
+        if dark_output is not None:
+            dark_output = self.make_output_path(basepath=dark_output, suffix=False)
 
-            # Open the dark ref file data model - based on Instrument
-            instrument = result.meta.instrument.name
-            if instrument == "MIRI":
-                dark_model = datamodels.DarkMIRIModel(self.dark_name)
-            elif instrument == "NIRSPEC":
-                dark_model = datamodels.DarkNirspecModel(self.dark_name)
-            else:
-                dark_model = datamodels.DarkModel(self.dark_name)
+        # Open the dark ref file data model - based on Instrument
+        instrument = result.meta.instrument.name
+        if instrument == "MIRI":
+            dark_model = datamodels.DarkMIRIModel(dark_name)
+        elif instrument == "NIRSPEC":
+            dark_model = datamodels.DarkNirspecModel(dark_name)
+        else:
+            dark_model = datamodels.DarkModel(dark_name)
 
-            # Store user-defined average_dark_current in model, if provided
-            # A user-defined value will take precedence over any value present
-            # in dark reference file
-            self.set_average_dark_current(result, dark_model)
+        # Store user-defined average_dark_current in model, if provided
+        # A user-defined value will take precedence over any value present
+        # in dark reference file
+        self.set_average_dark_current(result, dark_model)
 
-            # Do the dark correction
-            correction = dark_sub.do_correction(result, dark_model, dark_output)
+        # Do the dark correction
+        out_data, dark_data = dark_sub.do_correction(result, dark_model, dark_output)
+        if dark_data is not None and dark_data.save:
+            save_dark_data_as_dark_model(dark_data, dark_model, instrument)
 
-            out_data, dark_data = correction
+        out_ramp = dark_output_data_2_ramp_model(out_data, result)
 
-            if dark_data is not None and dark_data.save:
-                save_dark_data_as_dark_model(dark_data, dark_model, instrument)
-
-            out_ramp = dark_output_data_2_ramp_model(out_data, result)
-
-            # Cleanup
-            del dark_model
-            del result
+        # Cleanup
+        del dark_model
+        del result
 
         return out_ramp
 
@@ -86,36 +92,45 @@ class DarkCurrentStep(Step):
         Take the three possible locations specifying
         the average dark current and assign them to the
         input model, in priority order:
-        1) Any value provided to the step parameter, either from
-        the user or a parameter reference file
-        2) The 2-D array stored in dark_model.average_dark_current
-        3) The scalar value stored in dark_model.meta.exposure.average_dark_current
+
+        1. Any value provided to the step parameter, either from
+           the user or a parameter reference file
+        2. The 2-D array stored in ``dark_model.average_dark_current``
+        3. The scalar value stored in ``dark_model.meta.exposure.average_dark_current``
 
         Parameters
         ----------
         input_model : `~stdatamodels.jwst.datamodels.RampModel`
             The input datamodel containing the 4-D ramp array.
-        dark_model : Union[stdatamodels.jwst.datamodels.DarkModel,
-                           stdatamodels.jwst.datamodels.DarkMIRIModel]
+        dark_model : `~stdatamodels.jwst.datamodels.DarkModel` or \
+                     `~stdatamodels.jwst.datamodels.DarkMIRIModel`
             The dark reference file datamodel.
         """
         if self.average_dark_current is not None:
-            input_model.average_dark_current[:, :] = self.average_dark_current
-            self.log.info(
+            input_model.average_dark_current = (
+                input_model.get_default("average_dark_current") + self.average_dark_current
+            )
+            log.info(
                 "Using Poisson noise from average dark current %s e-/sec", self.average_dark_current
             )
         else:
             # First prioritize a 2D average_dark_current, if defined in dark.
             # If not present, apply scalar to datamodel array, if scalar is present.
-            if np.sum(dark_model.average_dark_current) == 0.0:
-                input_model.average_dark_current[:, :] = (
-                    dark_model.meta.exposure.average_dark_current
+            if (
+                dark_model.average_dark_current is None
+                or np.sum(dark_model.average_dark_current) == 0.0
+            ):
+                scalar_dark_current = dark_model.meta.exposure.average_dark_current
+                if scalar_dark_current is None:
+                    scalar_dark_current = 0.0
+                input_model.average_dark_current = (
+                    input_model.get_default("average_dark_current") + scalar_dark_current
                 )
             elif np.shape(input_model.average_dark_current) != np.shape(
                 dark_model.average_dark_current
             ):
-                self.log.warning("DarkModel average_dark_current does not match shape of data.")
-                self.log.warning("Dark current from reference file cannot be applied.")
+                log.warning("DarkModel average_dark_current does not match shape of data.")
+                log.warning("Dark current from reference file cannot be applied.")
             else:
                 input_model.average_dark_current = dark_model.average_dark_current
 
@@ -129,7 +144,7 @@ def save_dark_data_as_dark_model(dark_data, dark_model, instrument):
     dark_data : ndarray
         Dark data used in the dark current step.
 
-    dark_model : `~stdatamodels.jwst.datamodels.DarkMIRIModel` or
+    dark_model : `~stdatamodels.jwst.datamodels.DarkMIRIModel` or \
                  `~stdatamodels.jwst.datamodels.DarkModel`
         The input dark model from reference.
 
@@ -155,7 +170,7 @@ def dark_output_data_2_ramp_model(out_data, out_model):
 
     Parameters
     ----------
-    out_data : `~stdatamodels.jwst.datamodels.DataModel`
+    out_data : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Computed science data from the dark current step.
 
     out_model : `~stdatamodels.jwst.datamodels.RampModel`
@@ -170,10 +185,9 @@ def dark_output_data_2_ramp_model(out_data, out_model):
         # If processing was skipped in the lower-level routines,
         # just return the unmodified input model
         out_model.meta.cal_step.dark_sub = "SKIPPED"
-        return out_model
     else:
         out_model.meta.cal_step.dark_sub = out_data.cal_step
         out_model.data = out_data.data
         out_model.groupdq = out_data.groupdq
         out_model.pixeldq = out_data.pixeldq
-        return out_model
+    return out_model

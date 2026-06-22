@@ -26,9 +26,9 @@ def makemodel_ccode(fimg, xvec, imin, imax, lor_fwhm, lor_amp, g_fwhm, g_dx, g1_
     xvec : ndarray
         Array of x pixel values across the detector.
     imin : int
-        Starting column to fit (1/2 detector at a time)
+        Starting column to fit (1/2 detector at a time).
     imax : int
-        Ending column to fit
+        Ending column to fit.
     lor_fwhm : ndarray
         FWHM of the Lorenztian for each detector row.
     lor_amp : ndarray
@@ -39,14 +39,18 @@ def makemodel_ccode(fimg, xvec, imin, imax, lor_fwhm, lor_amp, g_fwhm, g_dx, g1_
         Linear offset of the gaussians for each detector row
         1x for inner gaussian pair, 2x for outer gaussian pair.
     g1_amp : ndarray
-        Amplitude of the inner gaussians for each detector row
+        Amplitude of the inner gaussians for each detector row.
     g2_amp : ndarray
         Amplitude of the outer gaussians for each detector row.
 
     Returns
     -------
     model : ndarray
-        1d cross-artifact detector model
+        1D cross-artifact detector model.
+
+    See Also
+    --------
+    makemodel_composite : Python version.
     """
     fuse = fimg.copy()
     badval = np.where(fuse < 0.0)
@@ -81,9 +85,9 @@ def makemodel_composite(fimg, xvec, imin, imax, lor_fwhm, lor_amp, g_fwhm, g_dx,
     xvec : ndarray
         Array of x pixel values across the detector.
     imin : int
-        Starting column to fit (1/2 detector at a time)
+        Starting column to fit (1/2 detector at a time).
     imax : int
-        Ending column to fit
+        Ending column to fit.
     lor_fwhm : ndarray
         FWHM of the Lorenztian for each detector row.
     lor_amp : ndarray
@@ -94,86 +98,113 @@ def makemodel_composite(fimg, xvec, imin, imax, lor_fwhm, lor_amp, g_fwhm, g_dx,
         Linear offset of the gaussians for each detector row
         1x for inner gaussian pair, 2x for outer gaussian pair.
     g1_amp : ndarray
-        Amplitude of the inner gaussians for each detector row
+        Amplitude of the inner gaussians for each detector row.
     g2_amp : ndarray
         Amplitude of the outer gaussians for each detector row.
 
     Returns
     -------
     model : ndarray
-        1d cross-artifact detector model
-    """
-    model = np.zeros_like(fimg)
-    model1d = model.ravel()
+        1D cross-artifact detector model.
 
+    See Also
+    --------
+    makemodel_ccode : C version.
+    """
     fuse = fimg.copy()
     badval = np.where(fuse < 0.0)
     if len(badval[0]) > 0:
         fuse[badval] = 0.0
-    fuse1d = fuse.ravel()
 
     gamma = lor_fwhm / 2.0
     gstd = g_fwhm / (2 * np.sqrt(2.0 * np.log(2)))
 
-    for yy in range(0, 1024):
-        for ii in range(imin, imax):
-            model1d[1032 * yy : 1032 * (yy + 1)] += (
-                fuse1d[yy * 1032 + ii] * lor_amp[yy] * gamma[yy] * gamma[yy]
-            ) / (gamma[yy] * gamma[yy] + (xvec - ii) * (xvec - ii))
-            model1d[1032 * yy : 1032 * (yy + 1)] += (
-                fuse1d[yy * 1032 + ii]
-                * g1_amp[yy]
-                * np.exp(
-                    -((xvec - ii - g_dx[yy]) * (xvec - ii - g_dx[yy])) / (2 * gstd[yy] * gstd[yy])
-                )
-            )
-            model1d[1032 * yy : 1032 * (yy + 1)] += (
-                fuse1d[yy * 1032 + ii]
-                * g1_amp[yy]
-                * np.exp(
-                    -((xvec - ii + g_dx[yy]) * (xvec - ii + g_dx[yy])) / (2 * gstd[yy] * gstd[yy])
-                )
-            )
-            model1d[1032 * yy : 1032 * (yy + 1)] += (
-                fuse1d[yy * 1032 + ii]
-                * g2_amp[yy]
-                * np.exp(
-                    -((xvec - ii - 2 * g_dx[yy]) * (xvec - ii - 2 * g_dx[yy]))
-                    / (8 * gstd[yy] * gstd[yy])
-                )
-            )
-            model1d[1032 * yy : 1032 * (yy + 1)] += (
-                fuse1d[yy * 1032 + ii]
-                * g2_amp[yy]
-                * np.exp(
-                    -((xvec - ii + 2 * g_dx[yy]) * (xvec - ii + 2 * g_dx[yy]))
-                    / (8 * gstd[yy] * gstd[yy])
-                )
-            )
+    # Initialize model
+    model = np.zeros_like(fimg)
+
+    # Reshape for easier broadcasting
+    # fuse shape: (1024, 1032)
+    # We'll work with each row separately but vectorize over columns
+
+    # Create index arrays for vectorization
+    ii_indices = np.arange(imin, imax)  # column indices to process
+
+    # Reshape parameters for broadcasting: (1024, 1) for row-wise operations
+    gamma_reshaped = gamma[:, np.newaxis]
+    lor_amp_reshaped = lor_amp[:, np.newaxis]
+    gstd_reshaped = gstd[:, np.newaxis]
+    g_dx_reshaped = g_dx[:, np.newaxis]
+    g1_amp_reshaped = g1_amp[:, np.newaxis]
+    g2_amp_reshaped = g2_amp[:, np.newaxis]
+
+    # Reshape xvec for broadcasting: (1, 1032)
+    xvec_reshaped = xvec[np.newaxis, :]
+
+    # Process each source column's contribution
+    for ii in ii_indices:
+        # Get flux values for this column across all rows: shape (1024,)
+        flux_column = fuse[:, ii][:, np.newaxis]  # shape (1024, 1)
+
+        # Calculate distance from source column to all detector columns
+        # Shape after broadcasting: (1024, 1032)
+        dx = xvec_reshaped - ii
+        dx_sq = dx * dx
+
+        # Lorentzian component
+        lorentzian = (flux_column * lor_amp_reshaped * gamma_reshaped * gamma_reshaped) / (
+            gamma_reshaped * gamma_reshaped + dx_sq
+        )
+
+        # Inner Gaussian pair (offset by +/- g_dx)
+        gaussian1_pos = (
+            flux_column
+            * g1_amp_reshaped
+            * np.exp(-((dx - g_dx_reshaped) ** 2) / (2 * gstd_reshaped * gstd_reshaped))
+        )
+        gaussian1_neg = (
+            flux_column
+            * g1_amp_reshaped
+            * np.exp(-((dx + g_dx_reshaped) ** 2) / (2 * gstd_reshaped * gstd_reshaped))
+        )
+
+        # Outer Gaussian pair (offset by +/- 2*g_dx, wider by factor of sqrt(4)=2)
+        gaussian2_pos = (
+            flux_column
+            * g2_amp_reshaped
+            * np.exp(-((dx - 2 * g_dx_reshaped) ** 2) / (8 * gstd_reshaped * gstd_reshaped))
+        )
+        gaussian2_neg = (
+            flux_column
+            * g2_amp_reshaped
+            * np.exp(-((dx + 2 * g_dx_reshaped) ** 2) / (8 * gstd_reshaped * gstd_reshaped))
+        )
+
+        # Add all components to model
+        model += lorentzian + gaussian1_pos + gaussian1_neg + gaussian2_pos + gaussian2_neg
 
     return model
 
 
 def correct_xartifact(input_model, modelpars):
     """
-    Correct the MIRI MRS data for 'straylight' produced by the cross-artifact.
+    Correct the MIRI MRS data for straylight produced by the cross-artifact.
 
-    This routine  applies a cross-artifact correction to MRS science slope images.
+    This routine applies a cross-artifact correction to MRS science slope images.
     The correction, based on reference model parameters, is subtracted from the
-    observed detector image. This effectively removes unpleasant 'detector'
+    observed detector image. This effectively removes unpleasant detector
     PSF effects that are non-local on the sky.
 
     Parameters
     ----------
-    input_model : `~jwst.datamodels.IFUImageModel`
+    input_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         Science data to be corrected.
 
-    modelpars : FITS binary table
-        Holds the reference parameters to be used to build the cross-artifact model
+    modelpars : `~astropy.io.fits.FITS_rec`
+        Holds the reference parameters to be used to build the cross-artifact model.
 
     Returns
     -------
-    output : `~jwst.datamodels.IFUImageModel`
+    output : `~stdatamodels.jwst.datamodels.IFUImageModel`
         Straylight-subtracted science data.
     """
     # Save some data parameters for easy use later
@@ -349,40 +380,40 @@ def clean_showers(
 
     Parameters
     ----------
-    input_model : `~jwst.datamodels.IFUImageModel`
+    input_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         Science data to be corrected.
 
-    allregions : numpy array
+    allregions : ndarray
         Holds the regions information mapping MRS pixels to slices
-        (3-D, planes for different throughput)
+        (3-D, planes for different throughput).
 
     shower_plane : int, optional
-        Throughput plane for identifying inter-slice regions
+        Throughput plane for identifying inter-slice regions.
 
     shower_x_stddev : float, optional
-        X standard deviation for shower model
+        X standard deviation for shower model.
 
     shower_y_stddev : float, optional
-        Y standard deviation for shower model
+        Y standard deviation for shower model.
 
     shower_low_reject : float, optional
-        Low percentile of pixels to reject
+        Low percentile of pixels to reject.
 
     shower_high_reject : float, optional
-        High percentile of pixels to reject
+        High percentile of pixels to reject.
 
     save_shower_model : bool
-        If set, a shower model is created and returned along with the cleaned input_model
-        array. If not, the `shower_model` returned is None
+        If `True`, a shower model is created and returned along with the cleaned input_model
+        array. If not, the ``output_shower_model`` returned is None.
 
     Returns
     -------
-    output : `~jwst.datamodels.IFUImageModel`
+    output : `~stdatamodels.jwst.datamodels.IFUImageModel`
         Straylight-subtracted science data.
 
-    output_shower_model : `~jwst.datamodels.IFUImageModel` or None
-        A datamodel containing the shower model, if `save_shower_model`
-        is True.
+    output_shower_model : `~stdatamodels.jwst.datamodels.IFUImageModel` or None
+        A datamodel containing the shower model, if ``save_shower_model``
+        is `True`.
     """
     log.info("Applying correction for residual cosmic ray showers.")
 
@@ -435,14 +466,14 @@ def _make_straylight_model(input_model, shower_data):
 
     Parameters
     ----------
-    input_model : `~jwst.datamodels.IFUImageModel`
+    input_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         The input data.
     shower_data : ndarray
         The intermediate shower model data to save.
 
     Returns
     -------
-    intermediate_model : `~jwst.datamodels.IFUImageModel`
+    intermediate_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         A model containing only the shower model data and top-level
         metadata matching the input.
     """

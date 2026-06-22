@@ -1,19 +1,21 @@
 import abc
 
 import numpy as np
+from astropy.utils import minversion
 from scipy.interpolate import RectBivariateSpline, interp1d
+from stcal.alignment.util import compute_scale
 from stdatamodels.jwst.datamodels import MultiSlitModel
 
-from jwst.assign_wcs.util import compute_scale
-
 __all__ = ["ApCorrBase", "ApCorrPhase", "ApCorrRadial", "ApCorr", "select_apcorr"]
+
+NUMPY_LT_2 = not minversion(np, "2.0")
 
 
 class ApCorrBase(abc.ABC):
     """Base class for aperture correction classes."""
 
     match_pars = {
-        "MIRI": {"LRS": {"subarray": ["name"]}},
+        "MIRI": {"LRS": {"subarray": ["name"]}, "WFSS": {"subarray": ["name"]}},
         "NIRSPEC": {
             "MSASPEC": {"instrument": ["filter", "grating"]},
             "FIXEDSLIT": {
@@ -169,7 +171,10 @@ class ApCorrBase(abc.ABC):
         for key, value in self.match_pars.items():
             if isinstance(value, str):
                 # Not all files will have the same format as input model metadata values.
-                table = table[table[key].upper() == value.upper()]
+                if NUMPY_LT_2:
+                    table = table[table[key].upper() == value.upper()]
+                else:
+                    table = table[np.strings.upper(table[key]) == value.upper()]
             else:
                 table = table[table[key] == value]
 

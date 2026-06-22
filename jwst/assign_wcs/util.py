@@ -3,20 +3,29 @@
 import logging
 import warnings
 
+import gwcs.coordinate_frames
 import numpy as np
+from astropy import units as u
 from astropy.constants import c
-from astropy.coordinates import SkyCoord
 from astropy.modeling import models as astmodels
-from astropy.table import QTable
 from gwcs import WCS
 from gwcs import utils as gwutils
 from gwcs.wcstools import grid_from_bounding_box
-from stcal.alignment.util import compute_s_region_imaging, compute_s_region_keyword
-from stdatamodels.jwst.datamodels import MiriLRSSpecwcsModel, WavelengthrangeModel
+from stcal.alignment.util import (
+    compute_s_region_imaging,
+    compute_s_region_keyword,
+    wcs_bbox_from_shape,
+)
+from stdatamodels.jwst.datamodels import (
+    ImageModel,
+    MiriLRSSpecwcsModel,
+    WavelengthrangeModel,
+)
 from stdatamodels.jwst.transforms.models import GrismObject
 from stpipe.exceptions import StpipeExitException
 
-from jwst.lib.catalog_utils import SkyObject
+from jwst.lib.catalog_utils import SkyObject, read_source_catalog
+from jwst.lib.stripe_utils import stripe_read
 
 log = logging.getLogger(__name__)
 
@@ -28,10 +37,10 @@ __all__ = [
     "velocity_correction",
     "MSAFileError",
     "NoDataOnDetectorError",
-    "compute_scale",
     "calc_rotation_matrix",
     "wrap_ra",
     "update_fits_wcsinfo",
+    "is_sky_like",
 ]
 
 
@@ -63,66 +72,6 @@ class NoDataOnDetectorError(StpipeExitException):
         super().__init__(64, message)
 
 
-def compute_scale(
-    wcs: WCS,
-    fiducial: tuple | np.ndarray,
-    disp_axis: int | None = None,
-    pscale_ratio: float | None = None,
-) -> float:
-    """
-    Compute scaling transform.
-
-    Parameters
-    ----------
-    wcs : `~gwcs.wcs.WCS`
-        Reference WCS object from which to compute a scaling factor.
-    fiducial : tuple
-        Input fiducial of (RA, DEC) or (RA, DEC, Wavelength) used in calculating reference points.
-    disp_axis : int
-        Dispersion axis integer. Assumes the same convention as `wcsinfo.dispersion_direction`
-    pscale_ratio : int
-        Ratio of output pixel scale to input pixel scale.
-
-    Returns
-    -------
-    scale : float
-        Scaling factor for x and y or cross-dispersion direction.
-    """
-    spectral = "SPECTRAL" in wcs.output_frame.axes_type
-
-    if spectral and disp_axis is None:
-        raise ValueError("If input WCS is spectral, a disp_axis must be given")
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", "invalid value", RuntimeWarning)
-        crpix = np.array(wcs.invert(*fiducial, with_bounding_box=False))
-
-    delta = np.zeros_like(crpix)
-    spatial_idx = np.where(np.array(wcs.output_frame.axes_type) == "SPATIAL")[0]
-    delta[spatial_idx[0]] = 1
-
-    crpix_with_offsets = np.vstack((crpix, crpix + delta, crpix + np.roll(delta, 1))).T
-    crval_with_offsets = wcs(*crpix_with_offsets, with_bounding_box=False)
-
-    coords = SkyCoord(
-        ra=crval_with_offsets[spatial_idx[0]], dec=crval_with_offsets[spatial_idx[1]], unit="deg"
-    )
-    xscale: float = np.abs(coords[0].separation(coords[1]).value)
-    yscale: float = np.abs(coords[0].separation(coords[2]).value)
-
-    if pscale_ratio is not None:
-        xscale *= pscale_ratio
-        yscale *= pscale_ratio
-
-    if spectral:
-        # Assuming scale doesn't change with wavelength
-        # Assuming disp_axis is consistent with DataModel.meta.wcsinfo.dispersion.direction
-        return yscale if disp_axis == 1 else xscale
-
-    scale: float = np.sqrt(xscale * yscale)
-    return scale
-
-
 def calc_rotation_matrix(roll_ref: float, v3i_yang: float, vparity: int = 1) -> list[float]:
     """
     Calculate the rotation matrix.
@@ -140,11 +89,11 @@ def calc_rotation_matrix(roll_ref: float, v3i_yang: float, vparity: int = 1) -> 
     Returns
     -------
     matrix : list
-        The rotation matrix, [pc1_1, pc1_2, pc2_1, pc2_2]
+        The rotation matrix, ``[pc1_1, pc1_2, pc2_1, pc2_2]``
 
     Notes
     -----
-    The rotation is
+    The rotation is::
 
        ----------------
        | pc1_1  pc2_1 |
@@ -170,14 +119,15 @@ def subarray_transform(input_model):
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
 
     Returns
     -------
-    subarray2full : `~astropy.modeling.core.Model` or ``None``
-        Returns a (combination of ) ``Shift`` models if a subarray is used.
-        Returns ``None`` if a full frame observation.
+    subarray2full : `~astropy.modeling.Model` or `None`
+        Returns a (combination of) `~astropy.modeling.functional_models.Shift` models
+        if a subarray is used.
+        Returns `None` if a full frame observation.
     """
     tr_xstart = astmodels.Identity(1)
     tr_ystart = astmodels.Identity(1)
@@ -200,13 +150,100 @@ def subarray_transform(input_model):
         return subarray2full
 
 
+def substripe_subarray_transforms(input_model, regions_model):
+    """
+    Return a dictionary of offset models for NIRCam substripe data.
+
+    This method does not yet generalize to arbitrary fastaxis values, only +/- 1.
+
+    The dictionary will have key-value pairs of stripe number and astropy
+    CompoundModel or None. Due to the packing of stripes into a condensed,
+    subarray-like shape, the stripe x and y start values must be calculated
+    rather than taken from subarray metadata.
+
+    Parameters
+    ----------
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel` or
+        `~stdatamodels.jwst.datamodels.CubeModel`
+        The science model with defined multistripe parameters.
+    regions_model : `~stdatamodels.jwst.datamodels.RegionsModel`
+        The regions reference model that defines stripe labels given pixel position.
+
+    Returns
+    -------
+    dict
+        The dictionary of subarray shift models to apply to each substripe transform.
+    """
+    # Start by finding defined stripes in region
+    if "NRCALONG" in input_model.meta.instrument.detector.upper():
+        # Current plan for DHS stripes in nrcalong is to use existing transform
+        # for NRC_TSGRISM, which assumes a fixed 2d extracted region and is not
+        # functional until that extraction occurs. Force a subarray shift that is
+        # useless until extract_2d is called, where we mimic existing behavior for
+        # non-DHS TSGRISM data - existing data places the trace on row 34, and we
+        # have the trace in the midpoint of the 40-row stripe.
+        ystart_offset = -14.0
+        subarray_stripenum = int(input_model.meta.subarray.name.split("STRIPE")[1][0])
+        stripe_ids = np.array(range(subarray_stripenum)) + 1
+        subarray_transforms = {}
+        for stripe in stripe_ids:
+            subarray_transforms[stripe] = astmodels.Identity(1) & astmodels.Shift(ystart_offset)
+        return subarray_transforms
+
+    else:
+        stripe_ids = np.unique(regions_model.regions).astype(int)
+        stripe_ids = stripe_ids[stripe_ids != 0]
+
+    subarray_transforms = {}
+    for stripe in stripe_ids:
+        tr_xstart = astmodels.Identity(1)
+        tr_ystart = astmodels.Identity(1)
+
+        # Find minimum slowaxis index where region label is found in regions array.
+        # This index is the zero-indexed position where that subarray in the regions
+        # model begins, i.e. the "true (x, y)start" position for that stripe.
+        if np.abs(input_model.meta.subarray.fastaxis) == 1:
+            xrefstart = np.min(np.asarray(regions_model.regions == stripe).nonzero()[1])
+            yrefstart = np.min(np.asarray(regions_model.regions == stripe).nonzero()[0])
+        else:
+            xrefstart = np.min(np.asarray(regions_model.regions == stripe).nonzero()[0])
+            yrefstart = np.min(np.asarray(regions_model.regions == stripe).nonzero()[1])
+
+        # Now we need to find where in the data array the 0th row of the stripe resides.
+        # We do this by generating a row-index-filled array and send it through the substripe
+        # readout logic, providing a row map from full frame row index to substripe array location.
+        ncols_reg, nrows_reg = regions_model.regions.shape
+        ra = np.arange(nrows_reg)
+        rowarr = np.stack((ra,) * ncols_reg).T
+
+        mock_refmodel = ImageModel(data=rowarr)
+        output = stripe_read(input_model, mock_refmodel, ["data"])
+        yscistart = np.where(output.data == yrefstart)[0]
+
+        if xrefstart > 0:
+            tr_xstart = astmodels.Shift(xrefstart)
+
+        if yrefstart > 0 and len(yscistart) > 0:
+            yrefstart = yrefstart - yscistart[0]
+            tr_ystart = astmodels.Shift(yrefstart)
+
+        if isinstance(tr_xstart, astmodels.Identity) and isinstance(tr_ystart, astmodels.Identity):
+            # the case of a full frame observation
+            subarray_transforms[stripe] = None
+        else:
+            log.info(f"Substripe subarray shifts: x: {xrefstart} y: {yrefstart}")
+            subarray_transforms[stripe] = tr_xstart & tr_ystart
+
+    return subarray_transforms
+
+
 def not_implemented_mode(input_model, ref, slit_y_range=None):  # noqa: ARG001
     """
     Send an error to the log and return None if assign_wcs has not been implemented for a mode.
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     ref : dict
         Mapping between reftype (keys) and reference file name (vals).
@@ -223,35 +260,20 @@ def get_object_info(catalog_name=None):
     Return a list of SkyObjects from the direct image.
 
     The source_catalog step catalog items are read into a list
-    of  SkyObjects which can be referenced by catalog id. Only
+    of SkyObjects which can be referenced by catalog id. Only
     the columns needed by the WFSS code are saved.
 
     Parameters
     ----------
-    catalog_name : str, astropy.table.table.Qtable
+    catalog_name : str, `astropy.table.Qtable`
         The name of the photutils catalog or its quantities table
 
     Returns
     -------
-    objects : list[jwst.transforms.models.SkyObject]
-        A list of SkyObject tuples
+    objects : list
+        A list of `~jwst.lib.catalog_utils.SkyObject` tuples
     """
-    if isinstance(catalog_name, str):
-        if len(catalog_name) == 0:
-            err_text = "Empty catalog filename"
-            log.error(err_text)
-            raise ValueError(err_text)
-        try:
-            catalog = QTable.read(catalog_name, format="ascii.ecsv")
-        except FileNotFoundError as e:
-            log.error(f"Could not find catalog file: {e}")
-            raise FileNotFoundError(f"Could not find catalog: {e}") from None
-    elif isinstance(catalog_name, QTable):
-        catalog = catalog_name
-    else:
-        err_text = "Need to input string name of catalog or astropy.table.table.QTable instance"
-        log.error(err_text)
-        raise TypeError(err_text)
+    catalog = read_source_catalog(catalog_name)
 
     objects = []
 
@@ -299,6 +321,7 @@ def create_grism_bbox(
     reference_files=None,
     mmag_extract=None,
     extract_orders=None,
+    source_ids=None,
     wfss_extract_half_height=None,
     wavelength_range=None,
     nbright=None,
@@ -315,27 +338,29 @@ def create_grism_bbox(
 
     Parameters
     ----------
-    input_model : ImageModel
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel`
         Data model which holds the grism image
     reference_files : dict, optional
         Dictionary of reference file names.
-        If ``None``, ``wavelength_range`` must be supplied to specify
+        If `None`, ``wavelength_range`` must be supplied to specify
         the orders and corresponding wavelength ranges to be used in extraction.
     mmag_extract : float, optional
         The faintest magnitude to extract from the catalog.
     extract_orders : list, optional
         The list of orders to extract, if specified this will
         override the orders listed in the wavelengthrange reference file.
-        If ``None``, the default one in the wavelengthrange reference file is used.
+        If `None`, the default one in the wavelengthrange reference file is used.
+    source_ids : list, optional
+        List of source IDs to extract.
     wfss_extract_half_height : int, optional
         Cross-dispersion extraction half height in pixels, WFSS mode.
-        Overwrites the computed extraction height in ``GrismObject.order_bounding.``
-        If ``None``, it's computed from the segmentation map,
+        Overwrites the computed extraction height in ``GrismObject.order_bounding``.
+        If `None`, it's computed from the segmentation map,
         using the min and max wavelength for each of the orders that
         are available.
     wavelength_range : dict, optional
-        Pairs of {spectral_order: (wave_min, wave_max)} for each order.
-        If ``None``, the default one in the wavelengthrange reference file is used.
+        Pairs of ``{spectral_order: (wave_min, wave_max)}`` for each order.
+        If `None`, the default one in the wavelengthrange reference file is used.
     nbright : int, optional
         The number of brightest objects to extract from the catalog.
 
@@ -355,7 +380,7 @@ def create_grism_bbox(
 
     It's left to the calling routine to cut the bounding boxes at the
     extent of the detector (for example, extract 2d would only extract
-    the on-detector portion of the bounding box)
+    the on-detector portion of the bounding box).
 
     Bounding box dispersion direction is dependent on the filter and
     module for NIRCAM and changes for GRISMR, but is consistent for GRISMC,
@@ -369,12 +394,14 @@ def create_grism_bbox(
     ``wfss_extract_half_height`` can only be applied to point source objects.
     """
     instr_name = input_model.meta.instrument.name
-    if instr_name == "NIRCAM":
+    if instr_name in ["NIRCAM", "MIRI"]:
         filter_name = input_model.meta.instrument.filter
     elif instr_name == "NIRISS":
         filter_name = input_model.meta.instrument.pupil
     else:
-        raise ValueError("create_grism_object works with NIRCAM and NIRISS WFSS exposures only.")
+        raise ValueError(
+            "create_grism_object works with NIRCAM, NIRISS, and MIRI WFSS exposures only."
+        )
 
     if reference_files is None:
         # Get the list of extract_orders and lmin, lmax from wavelength_range.
@@ -394,7 +421,6 @@ def create_grism_bbox(
                 extract_orders = [x[1] for x in ref_extract_orders if x[0] == filter_name].pop()
 
             wavelength_range = f.get_wfss_wavelength_range(filter_name, extract_orders)
-
     if mmag_extract is None:
         mmag_extract = 999.0  # extract all objects, regardless of magnitude
     else:
@@ -409,9 +435,10 @@ def create_grism_bbox(
         raise ValueError(err_text)
 
     log.info(f"Getting objects from {input_model.meta.source_catalog}")
+    log.info("Creating bounding boxes for grism objects, rejecting sources fully off-detector")
 
     return _create_grism_bbox(
-        input_model, mmag_extract, wfss_extract_half_height, wavelength_range, nbright
+        input_model, mmag_extract, wfss_extract_half_height, wavelength_range, nbright, source_ids
     )
 
 
@@ -421,11 +448,13 @@ def _create_grism_bbox(
     wfss_extract_half_height=None,
     wavelength_range=None,
     nbright=None,
+    source_ids=None,
 ):
     log.debug(f"Extracting with wavelength_range {wavelength_range}")
 
     # this contains the pure information from the catalog with no translations
     skyobject_list = get_object_info(input_model.meta.source_catalog)
+
     # get the imaging transform to record the center of the object in the image
     # here, image is in the imaging reference frame, before going through the
     # dispersion coefficients
@@ -439,6 +468,9 @@ def _create_grism_bbox(
             continue
         if obj.isophotal_abmag >= mmag_extract:
             continue
+        if source_ids is not None:
+            if obj.label not in np.atleast_1d(source_ids):
+                continue
         # could add logic to ignore object if too far off image,
 
         # save the image frame center of the object
@@ -476,8 +508,8 @@ def _create_grism_bbox(
                     obj.sky_bbox_ur.dec.value,
                 ]
             )
-            x1, y1, _, _, _ = sky_to_grism(ra, dec, [lmin] * 4, [order] * 4)
-            x2, y2, _, _, _ = sky_to_grism(ra, dec, [lmax] * 4, [order] * 4)
+            x1, y1, _, _, _ = sky_to_grism(ra, dec, lmin, order)
+            x2, y2, _, _, _ = sky_to_grism(ra, dec, lmax, order)
 
             xstack = np.hstack([x1, x2])
             ystack = np.hstack([y1, y2])
@@ -525,10 +557,10 @@ def _create_grism_bbox(
                     raise ValueError("Cannot determine dispersion direction.")
 
             # Convert floating-point corner values to whole pixel indexes
-            xmin = gwutils._toindex(xmin)  # noqa: SLF001
-            xmax = gwutils._toindex(xmax)  # noqa: SLF001
-            ymin = gwutils._toindex(ymin)  # noqa: SLF001
-            ymax = gwutils._toindex(ymax)  # noqa: SLF001
+            xmin = gwutils.to_index(xmin)
+            xmax = gwutils.to_index(xmax)
+            ymin = gwutils.to_index(ymin)
+            ymax = gwutils.to_index(ymax)
 
             # Don't add objects and orders that are entirely off the detector.
             # "partial_order" marks objects that are near enough to the detector
@@ -575,17 +607,22 @@ def _create_grism_bbox(
 
             if not contained:
                 exclude = True
-                log.info(f"Excluding off-image object: {obj.label}, order {order}")
+                log.debug(f"Excluding off-image object: {obj.label}, order {order}")
             elif contained >= 1:
                 outbox = pts[np.logical_not(inidx)]
                 if len(outbox) > 0:
                     ispartial = True
-                    log.info(f"Partial order on detector for obj: {obj.label} order: {order}")
+                    log.debug(f"Partial order on detector for obj: {obj.label} order: {order}")
 
             if not exclude:
                 order_bounding[order] = ((ymin, ymax), (xmin, xmax))
                 waverange[order] = (lmin, lmax)
                 partial_order[order] = ispartial
+            if exclude and source_ids is not None:
+                # If source_ids is specified, we want to warn for excluded objects
+                log.warning(
+                    f"Excluding requested object: {obj.label}, order {order} (off detector)"
+                )
 
         if len(order_bounding) > 0:
             grism_objects.append(
@@ -607,21 +644,17 @@ def _create_grism_bbox(
             )
 
     # At this point we have a list of grism objects limited to
-    # isophotal_abmag < mmag_extract. We now need to further restrict
-    # the list to the N brightest objects, as given by nbright.
+    # isophotal_abmag < mmag_extract and filtered by source_ids.
+    # We now need to further restrict the list to the N brightest objects, as given by nbright.
+    indxs = np.argsort([obj.isophotal_abmag for obj in grism_objects])
+    grism_objects = [grism_objects[i] for i in indxs]
     if nbright is None:
         # Include all objects, regardless of brightness
         final_objects = grism_objects
     else:
-        # grism_objects is a list of objects, so it's not easy or practical
-        # to sort it directly. So create a list of the isophotal_abmags, which
-        # we'll then use to find the N brightest objects.
-        indxs = np.argsort([obj.isophotal_abmag for obj in grism_objects])
-
         # Create a final grism object list containing only the N brightest objects
-        final_objects = []
-        final_objects = [grism_objects[i] for i in indxs[:nbright]]
-        del grism_objects
+        final_objects = grism_objects[:nbright]
+    del grism_objects
 
     log.info(f"Total of {len(final_objects)} grism objects defined")
     if len(final_objects) == 0:
@@ -654,37 +687,17 @@ def transform_bbox_from_shape(shape, order="C"):
     return bbox if order == "C" else bbox[::-1]
 
 
-def wcs_bbox_from_shape(shape):
-    """
-    Create a bounding box from the shape of the data.
-
-    This is appropriate to attach to a wcs object
-
-    Parameters
-    ----------
-    shape : tuple
-        The shape attribute from a `numpy.ndarray` array
-
-    Returns
-    -------
-    bbox : tuple
-        Bounding box in x, y order.
-    """
-    bbox = ((-0.5, shape[-1] - 0.5), (-0.5, shape[-2] - 0.5))
-    return bbox
-
-
 def bounding_box_from_subarray(input_model, order="C"):
     """
     Create a bounding box from the subarray size.
 
     Note: The bounding_box assumes full frame coordinates.
-    It is set to ((ystart, ystart + xsize), (xstart, xstart + xsize)).
+    It is set to ``((ystart, ystart + xsize), (xstart, xstart + xsize))``.
     It is in 0-based coordinates.
 
     Parameters
     ----------
-    input_model : JwstDataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input data model.
     order : str
         The order of the array.  Either "C" or "F".
@@ -692,8 +705,8 @@ def bounding_box_from_subarray(input_model, order="C"):
     Returns
     -------
     bbox : tuple
-        Bounding box in y, x order if order is "C" (default)
-        Boundsing box in x, y order if order is "F"
+        Bounding box in y, x order if order is "C" (default).
+        Bounding box in x, y order if order is "F".
     """
     bb_xstart = -0.5
     bb_xend = -0.5
@@ -724,7 +737,7 @@ def update_s_region_lrs(model, reference_files):
 
     Parameters
     ----------
-    model : DataModel
+    model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         Input model
     reference_files : list
         List of reference files for assign_wcs.
@@ -764,7 +777,7 @@ def compute_footprint_spectral(model):
 
     Parameters
     ----------
-    model : DataModel
+    model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The output of assign_wcs.
 
     Returns
@@ -821,7 +834,7 @@ def compute_footprint_nrs_slit(slit):
 
     Parameters
     ----------
-    slit : `~jwst.datamodels.SlitModel`
+    slit : `~stdatamodels.jwst.datamodels.SlitModel`
         The slit model.
 
     Returns
@@ -845,6 +858,7 @@ def compute_footprint_nrs_slit(slit):
 
 
 def update_s_region_nrs_slit(slit):
+    """Update the S_REGION keyword for NIRSpec slit."""
     footprint, spectral_region = compute_footprint_nrs_slit(slit)
     update_s_region_keyword(slit, footprint)
     slit.meta.wcsinfo.spectral_region = spectral_region
@@ -863,7 +877,7 @@ def compute_footprint_nrs_ifu(dmodel):
 
     Parameters
     ----------
-    dmodel : `~jwst.datamodels.IFUImageModel`
+    dmodel : `~stdatamodels.jwst.datamodels.IFUImageModel`
         The output of assign_wcs.
 
     Returns
@@ -909,7 +923,7 @@ def update_s_region_nrs_ifu(output_model):
 
     Parameters
     ----------
-    output_model : `~jwst.datamodels.IFUImageModel`
+    output_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         The output of assign_wcs.
     """
     footprint, spectral_region = compute_footprint_nrs_ifu(output_model)
@@ -923,7 +937,7 @@ def update_s_region_mrs(output_model):
 
     Parameters
     ----------
-    output_model : `~jwst.datamodels.IFUImageModel`
+    output_model : `~stdatamodels.jwst.datamodels.IFUImageModel`
         The output of assign_wcs.
     """
     footprint, spectral_region = compute_footprint_spectral(output_model)
@@ -958,16 +972,16 @@ def wrap_ra(ravalues):
 
     If exists it makes it difficult to determine
     RA range of a region on the sky. This problem is solved by putting them all
-    on "one side" of 0/360 border
+    on "one side" of 0/360 border.
 
     Parameters
     ----------
-    ravalues : numpy.ndarray
+    ravalues : ndarray
         The input RA values
 
     Returns
     -------
-    np.ndarray
+    ndarray
         A numpy array of RA values all on "same side" of 0/360 border
     """
     ravalues_array = np.array(ravalues)
@@ -995,11 +1009,11 @@ def wrap_ra(ravalues):
 
 def in_ifu_slice(slice_wcs, ra, dec, lam):
     """
-    Given RA, DEC and LAM return the x, y positions within a slice.
+    Given RA, DEC, and LAM return the x, y positions within a slice.
 
     Parameters
     ----------
-    slice_wcs : `~gwcs.WCS`
+    slice_wcs : `~gwcs.wcs.WCS`
         Slice WCS object.
     ra, dec, lam : float, ndarray
         Physical Coordinates.
@@ -1046,7 +1060,7 @@ def update_fits_wcsinfo(
     create FITS WCS representations of GWCS objects. Only most important
     :py:meth:`~gwcs.wcs.WCS.to_fits_sip` parameters are exposed here. Other
     arguments to :py:meth:`~gwcs.wcs.WCS.to_fits_sip` can be passed via
-    ``kwargs`` - see "Other Parameters" section below.
+    ``kwargs`` - see Parameters section below.
     Please refer to the documentation of :py:meth:`~gwcs.wcs.WCS.to_fits_sip`
     for more details.
 
@@ -1056,7 +1070,7 @@ def update_fits_wcsinfo(
 
     Parameters
     ----------
-    datamodel : `ImageModel`
+    datamodel : `~stdatamodels.jwst.datamodels.ImageModel`
         The input data model for imaging or WFSS mode whose ``meta.wcsinfo``
         field should be updated from GWCS. By default, ``datamodel.meta.wcs``
         is used to compute FITS WCS + SIP approximation. When ``imwcs`` is
@@ -1107,7 +1121,7 @@ def update_fits_wcsinfo(
         Projection to be used for the created FITS WCS. It can be specified
         as a string of three characters specifying a FITS projection code
         from Table 13 in
-        `Representations of World Coordinates in FITS \
+        `Representations of World Coordinates in FITS
         <https://doi.org/10.1051/0004-6361:20021326>`_
         (Paper I), Greisen, E. W., and Calabretta, M. R., A & A, 395,
         1061-1075, 2002. Alternatively, it can be an instance of one of the
@@ -1115,7 +1129,7 @@ def update_fits_wcsinfo(
         reference_api.html#module-astropy.modeling.projections>`_
         projection models inherited from
         :py:class:`~astropy.modeling.projections.Pix2SkyProjection`.
-    imwcs : `gwcs.WCS`, None, optional
+    imwcs : `gwcs.wcs.WCS`, None, optional
         Imaging GWCS object for WFSS mode whose FITS WCS approximation should
         be computed and stored in the ``datamodel.meta.wcsinfo`` field.
         When ``imwcs`` is `None` then WCS from ``datamodel.meta.wcs``
@@ -1134,7 +1148,7 @@ def update_fits_wcsinfo(
         * bounding_box : tuple, None, optional
             A pair of tuples, each consisting of two numbers
             Represents the range of pixel values in both dimensions
-            ((xmin, xmax), (ymin, ymax))
+            ``((xmin, xmax), (ymin, ymax))``
         * verbose : bool, optional
             Print progress of fits.
 
@@ -1173,7 +1187,6 @@ def update_fits_wcsinfo(
         degree = range(1, _MAX_SIP_DEGREE)
     if inv_degree is None:
         inv_degree = range(1, _MAX_SIP_DEGREE)
-
     hdr = imwcs.to_fits_sip(
         max_pix_error=max_pix_error,
         degree=degree,
@@ -1226,7 +1239,7 @@ def wfss_imaging_wcs(wfss_model, imaging, bbox=None, **kwargs):
 
     Parameters
     ----------
-    wfss_model : `~ImageModel`
+    wfss_model : `~stdatamodels.jwst.datamodels.ImageModel`
         Input WFSS model (NRC or NIS).
     imaging : func, callable
         The ``imaging`` function in the ``niriss`` or ``nircam`` modules.
@@ -1234,7 +1247,7 @@ def wfss_imaging_wcs(wfss_model, imaging, bbox=None, **kwargs):
         The bounding box over which to approximate the distortion solution.
         Typically this is based on the shape of the direct image.
     **kwargs : dict
-        Additional parameters to be passed to update_fits_wcsinfo().
+        Additional parameters to be passed to :func:`update_fits_wcsinfo`.
     """
     xstart = wfss_model.meta.subarray.xstart
     ystart = wfss_model.meta.subarray.ystart
@@ -1257,7 +1270,7 @@ def get_wcs_reference_files(datamodel):
 
     Parameters
     ----------
-    datamodel : ImageModel
+    datamodel : `~stdatamodels.jwst.datamodels.ImageModel`
         Input WFSS file (NRC or NIS).
 
     Returns
@@ -1276,3 +1289,26 @@ def get_wcs_reference_files(datamodel):
         else:
             refs[reftype] = val
     return refs
+
+
+def is_sky_like(frame):
+    """
+    Check that a frame is a sky-like frame by looking at its output units.
+
+    If output units are either ``deg`` or ``arcsec`` the frame is considered
+    a sky-like frame (as opposed to, e.g., a Cartesian frame).
+
+    Parameters
+    ----------
+    frame : `~gwcs.coordinate_frames.CoordinateFrame`
+        Coordinate frame to check.
+
+    Returns
+    -------
+    bool
+        ``True`` if the frame is sky-like, ``False`` otherwise.
+    """
+    # Make sure the frame is a coordinate frame first: if not, it's not sky-like
+    if not isinstance(frame, gwcs.coordinate_frames.CoordinateFrame):
+        return False
+    return u.Unit("deg") in frame.unit or u.Unit("arcsec") in frame.unit

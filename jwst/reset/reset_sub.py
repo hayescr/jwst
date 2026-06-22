@@ -1,6 +1,5 @@
-#
-#  Module for  subtracting reset correction from  science data sets
-#
+"""Utility functions for subtracting reset correction from science datasets."""
+
 import logging
 
 import numpy as np
@@ -16,23 +15,26 @@ def do_correction(output_model, reset_model):
 
     Subtracts the reset correction from science arrays and updates data quality array based
     on DQ flags in the reset arrays. The reset data model contains the number of initial
-    frames in an integration to correct in the reset_ngroups parameter and the number of
-    integrations for which a correction exists in the reset_nints parameter. Only the
-    first reset_ngroups in each integration will have a reset correction applied. If the
-    number of integrations in the science data is larger than reset_nints, then the reset correction
-    applied is the correction contained  in the reset_nints integration.
+    frames in an integration to correct in the
+    ``reset_model.meta.exposure.ngroups`` attribute (hereafter, ``reset_ngroups``)
+    and the number of integrations for which a correction exists in the
+    ``reset_model.meta.exposure.nints`` attribute (hereafter, ``reset_nints``).
+    Only the first ``reset_ngroups`` in each integration will have a reset correction applied.
+    If the number of integrations in the science data is larger than ``reset_nints``,
+    then the reset correction applied is the correction contained in the
+    ``reset_nints`` integration.
 
     Parameters
     ----------
-    output_model : `~jwst.datamodel.RampModel`
+    output_model : `~stdatamodels.jwst.datamodels.RampModel`
         Science data to be corrected
 
-    reset_model : `~jwst.datamodel.ResetModel`
+    reset_model : `~stdatamodels.jwst.datamodels.ResetModel`
         Reset reference file model
 
     Returns
     -------
-    output_model : `~jwst.datamodel.RampModel`
+    output_model : `~stdatamodels.jwst.datamodels.RampModel`
         Reset-subtracted science data
     """
     # Save some data params for easy use later
@@ -69,7 +71,7 @@ def do_correction(output_model, reset_model):
             ir = reset_nints - 1
 
         # combine the science and reset DQ arrays
-        output_model.pixeldq = np.bitwise_or(output_model.pixeldq, reset_model.dq)
+        output_model.pixeldq |= reset_model.dq
 
         # we are only correcting the first reset_ngroups
         for j in range(igroup):
@@ -77,7 +79,8 @@ def do_correction(output_model, reset_model):
 
             # combine the ERR arrays in quadrature
             # NOTE: currently stubbed out until ERR handling is decided
-            # output.err[i,j] = np.sqrt(
-            #           output.err[i,j]**2 + reset.err[j]**2)
+            # output.err[i, j] = np.sqrt(
+            #     output.err[i, j] ** 2 + reset.err[j] ** 2
+            # )
 
     return output_model

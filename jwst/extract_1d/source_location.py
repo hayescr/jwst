@@ -3,9 +3,8 @@ import logging
 import numpy as np
 from gwcs.wcstools import grid_from_bounding_box
 from scipy.interpolate import interp1d
+from stcal.alignment.util import wcs_bbox_from_shape
 from stdatamodels.jwst.transforms.models import IdealToV2V3
-
-from jwst.assign_wcs.util import wcs_bbox_from_shape
 
 __all__ = ["middle_from_wcs", "location_from_wcs", "trace_from_wcs", "nod_pair_location"]
 
@@ -23,7 +22,7 @@ def middle_from_wcs(wcs, bounding_box, dispaxis):
 
     Parameters
     ----------
-    wcs : `~gwcs.WCS`
+    wcs : `~gwcs.wcs.WCS`
         WCS for the input data model, containing detector to wavelength
         transforms.
     bounding_box : tuple
@@ -71,19 +70,22 @@ def middle_from_wcs(wcs, bounding_box, dispaxis):
     valid = np.isfinite(center_wavelengths[sort_idx])
 
     # Average to get the middle wavelength
-    middle_wavelength = np.nanmean(center_wavelengths)
+    if not np.any(valid):
+        middle_wavelength = np.nan
+    else:
+        middle_wavelength = np.nanmean(center_wavelengths)
 
     # Find the effective index in cross-dispersion coordinates for the
     # averaged wavelength to get the cross-dispersion center
     if dispaxis == HORIZONTAL:
-        if np.allclose(center_wavelengths, middle_wavelength):
+        if np.allclose(center_wavelengths, middle_wavelength) or np.isnan(middle_wavelength):
             middle_xdisp = np.mean(y)
         else:
             middle_xdisp = np.interp(
                 middle_wavelength, center_wavelengths[sort_idx][valid], y[sort_idx[valid]]
             )
     else:
-        if np.allclose(center_wavelengths, middle_wavelength):
+        if np.allclose(center_wavelengths, middle_wavelength) or np.isnan(middle_wavelength):
             middle_xdisp = np.mean(x)
         else:
             middle_xdisp = np.interp(
@@ -102,16 +104,16 @@ def location_from_wcs(input_model, slit, make_trace=True):
 
     Parameters
     ----------
-    input_model : DataModel
+    input_model : `~stdatamodels.jwst.datamodels.JwstDataModel`
         The input science model containing metadata information.
-    slit : DataModel or None
+    slit : `~stdatamodels.jwst.datamodels.JwstDataModel` or None
         One slit from a MultiSlitModel (or similar), or None.
-        The WCS and target coordinates will be retrieved from `slit`
-        unless `slit` is None. In that case, they will be retrieved
-        from `input_model`.
+        The WCS and target coordinates will be retrieved from ``slit``
+        unless ``slit`` is None. In that case, they will be retrieved
+        from ``input_model``.
     make_trace : bool, optional
         If True, the source position will be calculated for each
-        dispersion element and returned in `trace`.  If False,
+        dispersion element and returned in ``trace``.  If False,
         None is returned.
 
     Returns
@@ -122,9 +124,9 @@ def location_from_wcs(input_model, slit, make_trace=True):
         bounding box.  This is the point at which to determine the
         nominal extraction location, in case it varies along the
         spectrum.  The offset will then be the difference between
-        `location` (below) and the nominal location.
+        ``location`` (below) and the nominal location.
     middle_wl : float or None
-        The wavelength at pixel `middle`.
+        The wavelength at pixel ``middle``.
     location : float or None
         Pixel coordinate in the cross-dispersion direction within the
         spectral image that is at the planned target location.
@@ -133,7 +135,7 @@ def location_from_wcs(input_model, slit, make_trace=True):
         An array of source positions, one per dispersion element, corresponding
         to the location at each point in the wavelength array. If the
         input data is resampled, the trace corresponds directly to the
-        location. If the trace could not be generated, or `make_trace` is
+        location. If the trace could not be generated, or ``make_trace`` is
         False, None is returned.
     """
     if slit is not None:
@@ -183,19 +185,18 @@ def location_from_wcs(input_model, slit, make_trace=True):
 
     elif exp_type == "MIR_LRS-FIXEDSLIT":
         log.info("Using dithered_ra and dithered_dec to center extraction.")
-        try:
-            if slit is None:
-                dithra = input_model.meta.dither.dithered_ra
-                dithdec = input_model.meta.dither.dithered_dec
-            else:
-                dithra = slit.meta.dither.dithered_ra
-                dithdec = slit.meta.dither.dithered_dec
-            location, _ = wcs.backward_transform(dithra, dithdec, middle_wl)
+        if slit is None:
+            dithra = input_model.meta.dither.dithered_ra
+            dithdec = input_model.meta.dither.dithered_dec
+        else:
+            dithra = slit.meta.dither.dithered_ra
+            dithdec = slit.meta.dither.dithered_dec
 
-        except (AttributeError, TypeError):
-            log.warning("Dithered pointing location not found in wcsinfo.")
+        if dithra is None or dithdec is None:
+            log.warning("Dithered pointing location not found in meta.dither.")
             return None, None, None, None
 
+        location, _ = wcs.backward_transform(dithra, dithdec, middle_wl)
         if ~np.isnan(location) and make_trace:
             trace = _miri_trace_from_wcs(shape, bb, wcs, dithra, dithdec)
     else:
@@ -235,7 +236,7 @@ def _nirspec_trace_from_wcs(shape, bounding_box, wcs_ref, source_xpos, source_yp
         A pair of tuples, each consisting of two numbers.
         Represents the range of useful pixel values in both dimensions,
         ((xmin, xmax), (ymin, ymax)).
-    wcs_ref : `~gwcs.WCS`
+    wcs_ref : `~gwcs.wcs.WCS`
         WCS for the input data model, containing slit and detector
         transforms.
     source_xpos : float
@@ -300,7 +301,7 @@ def _miri_trace_from_wcs(shape, bounding_box, wcs_ref, source_ra, source_dec):
         A pair of tuples, each consisting of two numbers.
         Represents the range of useful pixel values in both dimensions,
         ((xmin, xmax), (ymin, ymax)).
-    wcs_ref : `~gwcs.WCS`
+    wcs_ref : `~gwcs.wcs.WCS`
         WCS for the input data model, containing sky and detector
         transforms, forward and backward.
     source_ra : float
@@ -366,7 +367,7 @@ def trace_from_wcs(exp_type, shape, bounding_box, wcs_ref, source_x, source_y, d
         A pair of tuples, each consisting of two numbers.
         Represents the range of useful pixel values in both dimensions,
         ((xmin, xmax), (ymin, ymax)).
-    wcs_ref : `~gwcs.WCS`
+    wcs_ref : `~gwcs.wcs.WCS`
         WCS for the input data model, containing sky and detector
         transforms, forward and backward.
     source_x : float

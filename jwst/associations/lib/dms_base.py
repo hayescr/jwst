@@ -9,7 +9,16 @@ from jwst.associations.lib.counter import Counter
 from jwst.associations.lib.diff import MultiDiffError, compare_asns
 from jwst.associations.lib.utilities import getattr_from_list
 
-__all__ = ["Constraint_TargetAcq", "Constraint_TSO", "Constraint_WFSC", "DMSBaseMixin"]
+__all__ = [
+    "Constraint_NotBkgd",
+    "Constraint_NotBkgdOrTSO",
+    "Constraint_NotTSO",
+    "Constraint_TargetAcq",
+    "Constraint_TSO",
+    "Constraint_WFSC",
+    "DMSAttrConstraint",
+    "DMSBaseMixin",
+]
 
 # Default product name
 PRODUCT_NAME_DEFAULT = "undefined"
@@ -101,6 +110,7 @@ SPEC2_SCIENCE_EXP_TYPES = [
     "mir_lrs-fixedslit",
     "mir_lrs-slitless",
     "mir_mrs",
+    "mir_wfss",
     "nis_soss",
     "nis_wfss",
     "nrc_tsgrism",
@@ -278,17 +288,17 @@ class DMSBaseMixin(ACIDMixin):
             The item to initialize the association with.
 
         version_id : str or None
-            Version_Id to use in the name of this association.
+            Version ID to use in the name of this association.
             If None, nothing is added.
 
         Returns
         -------
-        (association, reprocess_list)
-            2-tuple consisting of:
+        asn : `~jwst.associations.Association` or None
+            The association or, if the item does not
+            match this rule, None
 
-                - association : The association or, if the item does not
-                  match this rule, None
-                - [ProcessList[, ...]]: List of items to process again.
+        reprocess : list of `~jwst.associations.ProcessList`
+            List of items to process again.
         """
         asn, reprocess = super(DMSBaseMixin, cls).create(item, version_id)
         if not asn:
@@ -386,14 +396,26 @@ class DMSBaseMixin(ACIDMixin):
         return items
 
     @property
-    def member_ids(self):
+    def item_ids(self):
         """
-        Set of all member ids in all products of this association.
+        Set of all item IDs in all products of this association.
 
         Returns
         -------
         set
-            Set of member ids.
+            Set of item IDs.
+        """
+        return {item["filename"] for item in self.from_items}
+
+    @property
+    def member_ids(self):
+        """
+        Set of all member IDs in all products of this association.
+
+        Returns
+        -------
+        set
+            Set of member IDs.
         """
         member_ids = {member[MEMBER_KEY] for member in self["product"]["members"]}
         return member_ids
@@ -427,28 +449,28 @@ class DMSBaseMixin(ACIDMixin):
         Parameters
         ----------
         item : dict
-            The pool entry to determine the exposure type of
+            The pool entry to determine the exposure type of.
 
         default : str or None
             The default exposure type.
-            If None, routine will raise LookupError
+            If None, routine will raise LookupError.
 
         Returns
         -------
         exposure_type : str
-            Exposure type. Can be one of
+            Exposure type. Can be one of:
 
-                - 'science': Item contains science data
-                - 'target_acquisition': Item contains target acquisition data.
-                - 'autoflat': NIRSpec AUTOFLAT
-                - 'autowave': NIRSpec AUTOWAVE
-                - 'psf': PSF
-                - 'imprint': MSA/IFU Imprint/Leakcal
+            - 'science': Item contains science data
+            - 'target_acquisition': Item contains target acquisition data.
+            - 'autoflat': NIRSpec AUTOFLAT
+            - 'autowave': NIRSpec AUTOWAVE
+            - 'psf': PSF
+            - 'imprint': MSA/IFU Imprint/Leakcal
 
         Raises
         ------
         LookupError
-            When `default` is None and an exposure type cannot be determined
+            When ``default`` is None and an exposure type cannot be determined
         """
         return get_exposure_type(item, default=default, association=self)
 
@@ -490,13 +512,13 @@ class DMSBaseMixin(ACIDMixin):
         bool
             True if item is a member.
         """
-        return item in self.from_items
+        return item["filename"] in self.item_ids
 
     def is_item_ami(self, item):
         """
         Determine whether the specific item represents AMI data or not.
 
-        This simply includes items with EXP_TYPE='NIS_AMI'.
+        This simply includes items with ``EXP_TYPE='NIS_AMI'``.
 
         Parameters
         ----------
@@ -574,7 +596,7 @@ class DMSBaseMixin(ACIDMixin):
         Determine whether given item is TSO.
 
         This is used to determine the naming of files,
-        i.e. "rate" vs "rateints" and "cal" vs "calints".
+        i.e., "rate" vs "rateints" and "cal" vs "calints".
 
         Parameters
         ----------
@@ -633,9 +655,10 @@ class DMSBaseMixin(ACIDMixin):
 
         Returns
         -------
-        (attribute, value)
-            Returns the value and the attribute from
-            which the value was taken.
+        tuple
+            Returns the attribute and the value from
+            which the value was taken, in the form of
+            ``(attribute, value)``.
 
         Raises
         ------
@@ -669,8 +692,8 @@ class DMSBaseMixin(ACIDMixin):
 
         Notes
         -----
-        If both `item` and `member` are given,
-        information in `member` will take precedence.
+        If both ``item`` and ``member`` are given,
+        information in ``member`` will take precedence.
         """
         self.update_degraded_status()
 
@@ -706,7 +729,7 @@ class DMSBaseMixin(ACIDMixin):
 
         Parameters
         ----------
-        asn : ~jwst.association.Association
+        asn : `~jwst.associations.Association`
             The asn candidate to validate.
 
         Returns
@@ -729,13 +752,13 @@ class DMSBaseMixin(ACIDMixin):
 
     def get_exposure(self):
         """
-        Get string representation of the exposure id.
+        Get string representation of the exposure ID.
 
         Returns
         -------
         exposure : str
             The Level3 Product name representation
-            of the exposure & activity id.
+            of the exposure and activity ID.
         """
         exposure = ""
         try:
@@ -887,7 +910,7 @@ class DMSBaseMixin(ACIDMixin):
 
         Parameters
         ----------
-        other : ~jwst.association.Association
+        other : `~jwst.associations.Association`
             The other association to compare against.
 
         Returns
@@ -912,7 +935,7 @@ class DMSBaseMixin(ACIDMixin):
 
         Parameters
         ----------
-        other : ~jwst.association.Association
+        other : `~jwst.associations.Association`
             The other association to compare against.
 
         Returns
@@ -933,7 +956,7 @@ class DMSAttrConstraint(AttrConstraint):
     """
     DMS-focused attribute constraint.
 
-    Forces definition of invalid values
+    Forces definition of invalid values.
     """
 
     def __init__(self, **kwargs):
@@ -949,9 +972,10 @@ class Constraint_TargetAcq(SimpleConstraint):
 
     Parameters
     ----------
-    association : ~jwst.associations.Association
-        If specified, use the `get_exposure_type` method
-        of the association rather than the utility version.
+    association : `~jwst.associations.Association`
+        If specified, use the
+        :meth:`~jwst.associations.lib.dms_base.DMSBaseMixin.get_exposure_type`
+        method of the association rather than the utility version.
     """
 
     def __init__(self, association=None):
@@ -987,6 +1011,39 @@ class Constraint_TSO(Constraint):
                 ),
             ],
             name="is_tso",
+        )
+
+
+class Constraint_NotBkgd(Constraint):
+    """Match on non-background-target observations."""
+
+    def __init__(self, *args, **kwargs):  # noqa: ARG002
+        super(Constraint_NotBkgd, self).__init__(
+            [DMSAttrConstraint(name="bkgdtarg", sources=["bkgdtarg"], force_unique=False)],
+            reduce=Constraint.notany,
+        )
+
+
+class Constraint_NotBkgdOrTSO(Constraint):
+    """Match on non-background, non-TSO observations."""
+
+    def __init__(self, *args, **kwargs):  # noqa: ARG002
+        super(Constraint_NotBkgdOrTSO, self).__init__(
+            [
+                DMSAttrConstraint(name="bkgdtarg", sources=["bkgdtarg"]),
+                Constraint_TSO(),
+            ],
+            reduce=Constraint.notany,
+        )
+
+
+class Constraint_NotTSO(Constraint):
+    """Match on non-Time-Series Observations."""
+
+    def __init__(self, *args, **kwargs):  # noqa: ARG002
+        super(Constraint_NotTSO, self).__init__(
+            [Constraint_TSO()],
+            reduce=Constraint.notany,
         )
 
 
@@ -1038,13 +1095,14 @@ def get_exposure_type(item, default="science", association=None):
     default : str or None
         The default exposure type.
         If None, routine will raise LookupError
-    association : Association
+    association : `~jwst.associations.Association`
         Association, if provided.
 
     Returns
     -------
     exposure_type : str
-        Exposure type. Can be one of
+        Exposure type. Can be one of:
+
         - 'science': Item contains science data
         - 'target_acquisition': Item contains target acquisition data.
         - 'autoflat': NIRSpec AUTOFLAT
@@ -1055,7 +1113,7 @@ def get_exposure_type(item, default="science", association=None):
     Raises
     ------
     LookupError
-        When `default` is None and an exposure type cannot be determined
+        When ``default`` is None and an exposure type cannot be determined
     """
 
     # Specify how attributes of the item are retrieved.
@@ -1063,7 +1121,7 @@ def get_exposure_type(item, default="science", association=None):
         """
         Get attribute value of an item.
 
-        This simplifies the call to `item_getattr`.
+        This simplifies the call to :func:`item_getattr`.
 
         Parameters
         ----------

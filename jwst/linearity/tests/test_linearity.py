@@ -24,7 +24,6 @@ def test_coeff_dq():
     # create the data and groupdq arrays
     # create a JWST datamodel for MIRI data
     im = make_rampmodel(nints, ngroups, ysize, xsize)
-    im.meta.instrument.detector = "MIRIMAGE"
 
     # Create reference file
     numcoeffs = 5
@@ -118,7 +117,6 @@ def test_saturation():
 
     # create a JWST datamodel for MIRI data
     im = make_rampmodel(nints, ngroups, ysize, xsize)
-    im.meta.instrument.detector = "MIRIMAGE"
 
     # set groupdq pixels to saturated
     im.groupdq[0, 10:, 200, 150] = dqflags.pixel["SATURATED"]  # saturated dq flag
@@ -143,7 +141,6 @@ def test_nolincorr():
 
     # create a JWST datamodel for MIRI data
     im = make_rampmodel(nints, ngroups, ysize, xsize)
-    im.meta.instrument.detector = "MIRIMAGE"
 
     # set data value
     im.data[0, 5, 500, 500] = 35
@@ -185,7 +182,6 @@ def test_pixeldqprop():
 
     # create a JWST datamodel for MIRI data
     im = make_rampmodel(nints, ngroups, ysize, xsize)
-    im.meta.instrument.detector = "MIRIMAGE"
 
     # Create reference file
     dq = np.zeros((ysize, xsize), dtype=int)
@@ -293,18 +289,93 @@ def test_lin_subarray():
     assert outpixdq[76, 104] == 1
 
 
-def make_rampmodel(nints, ngroups, ysize, xsize):
-    """Function to provide ramp model to tests"""
+def test_invlin_corr():
+    # size of integration
+    nints = 1
+    ngroups = 5
+    xsize = 1
+    ysize = 1
 
+    # create the data and groupdq arrays
+    # create a JWST datamodel for MIRI data
+    im = make_rampmodel(nints, ngroups, ysize, xsize)
+
+    # Create reference file
+    numcoeffs = 5
+
+    ref_model = LinearityModel((numcoeffs, ysize, xsize))
+    ref_model.dq = np.zeros((ysize, xsize), dtype=int)
+
+    ref_model.meta.instrument.name = "MIRI"
+    ref_model.meta.instrument.detector = "MIRIMAGE"
+    ref_model.meta.subarray.xstart = 1
+    ref_model.meta.subarray.ystart = 1
+    ref_model.meta.subarray.xsize = xsize
+    ref_model.meta.subarray.ysize = ysize
+
+    # Set coefficient values in reference file to check the algorithm
+    # Equation is DNcorr = L0 + L1*DN(i) + L2*DN(i)^2 + L3*DN(i)^3 + L4*DN(i)^4
+    # DN(i) = signal in pixel, Ln = coefficient from ref file
+    # L0 = 0 for all pixels for CDP6
+
+    coeffs = np.array([0.0e00, 0.85, 4.62e-06, -6.16e-11, 7.23e-16], dtype=float)
+    inv_coeffs = np.array([5.70843e01, 1.14856e00, -4.14988e-06, 2.89205e-11, -2.32875e-16])
+    ref_model.coeffs[:, :, :] = coeffs[:, np.newaxis, np.newaxis]
+
+    im.meta.exposure.nframes = 4
+
+    im.data[0, :, 0, 0] = np.array([11400.0, 19200.0, 26600.0, 34010.0, 41900.0])
+
+    result1 = LinearityStep.call(im, override_linearity=ref_model)
+
+    ref_model.inv_coeffs = np.zeros_like(ref_model.coeffs)
+    ref_model.inv_coeffs = inv_coeffs[:, np.newaxis, np.newaxis]
+    result2 = LinearityStep.call(im, override_linearity=ref_model)
+
+    np.testing.assert_allclose(
+        actual=np.sum(np.abs(result1.data - result2.data)),
+        desired=68.853516,
+        rtol=1e-05,
+    )
+
+
+def test_output_is_not_input():
+    im = make_rampmodel()
+
+    # step completes
+    result = LinearityStep.call(im)
+    assert result.meta.cal_step.linearity == "COMPLETE"
+
+    # input is not modified
+    assert result is not im
+    assert im.meta.cal_step.linearity is None
+
+
+def test_output_is_not_input_when_skipped():
+    im = make_rampmodel()
+
+    # step is skipped when no reference file is found
+    result = LinearityStep.call(im, override_linearity="N/A")
+    assert result.meta.cal_step.linearity == "SKIPPED"
+
+    # input is not modified
+    assert result is not im
+    assert im.meta.cal_step.linearity is None
+
+
+def make_rampmodel(nints=1, ngroups=160, ysize=103, xsize=102):
+    """Function to provide ramp model to tests"""
     dm_ramp = RampModel((nints, ngroups, ysize, xsize))
     dm_ramp.data += 1
 
     dm_ramp.meta.instrument.name = "MIRI"
+    dm_ramp.meta.instrument.detector = "MIRIMAGE"
     dm_ramp.meta.observation.date = "2018-01-01"
     dm_ramp.meta.observation.time = "00:00:00"
     dm_ramp.meta.subarray.xstart = 1
     dm_ramp.meta.subarray.xsize = xsize
     dm_ramp.meta.subarray.ystart = 1
     dm_ramp.meta.subarray.ysize = ysize
+    dm_ramp.meta.exposure.ngroups = ngroups
 
     return dm_ramp

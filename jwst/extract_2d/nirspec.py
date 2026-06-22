@@ -6,7 +6,7 @@ import logging
 import numpy as np
 from astropy.modeling.models import Shift
 from gwcs import wcstools
-from gwcs.utils import _toindex
+from gwcs.utils import to_index
 from stdatamodels.jwst import datamodels
 from stdatamodels.jwst.transforms import models as trmodels
 
@@ -33,8 +33,10 @@ def nrs_extract2d(input_model, slit_names=None, source_ids=None):
 
     Parameters
     ----------
-    input_model : `~jwst.datamodels.ImageModel` or `~jwst.datamodels.CubeModel`
-        Input data model.
+    input_model : `~stdatamodels.jwst.datamodels.ImageModel` or \
+                  `~stdatamodels.jwst.datamodels.CubeModel`
+        Input data model. May be updated in place with a "SKIPPED" status,
+        if a new model cannot be created.
     slit_names : list containing strings or ints
         Slit names.
     source_ids : list containing strings or ints
@@ -42,21 +44,22 @@ def nrs_extract2d(input_model, slit_names=None, source_ids=None):
 
     Returns
     -------
-    output_model : SlitModel or MultiSlitModel
+    output_model : `~stdatamodels.jwst.datamodels.MultiSlitModel`, or
+                   `~stdatamodels.jwst.datamodels.SlitModel`
         DataModel containing extracted slit(s)
     """
     exp_type = input_model.meta.exposure.type.upper()
 
     if (
-        hasattr(input_model.meta.cal_step, "assign_wcs")
-        and input_model.meta.cal_step.assign_wcs == "SKIPPED"
+        input_model.meta.cal_step.assign_wcs is None
+        or input_model.meta.cal_step.assign_wcs == "SKIPPED"
     ):
         log.info("assign_wcs was skipped")
         log.warning("extract_2d will be SKIPPED")
         input_model.meta.cal_step.extract_2d = "SKIPPED"
         return input_model
 
-    if not (hasattr(input_model.meta, "wcs") and input_model.meta.wcs is not None):
+    if getattr(input_model.meta, "wcs", None) is None:
         raise AttributeError(
             "Input model does not have a WCS object; assign_wcs should be run before extract_2d."
         )
@@ -65,7 +68,8 @@ def nrs_extract2d(input_model, slit_names=None, source_ids=None):
     open_slits = input_model.meta.wcs.get_transform("gwa", "slit_frame").slits
 
     # Select the slits to process
-    open_slits = select_slits(open_slits, slit_names, source_ids)
+    if slit_names is not None or source_ids is not None:
+        open_slits = select_slits(open_slits, slit_names, source_ids)
 
     # NIRSpec BRIGHTOBJ (S1600A1 TSO) mode
     if exp_type == "NRS_BRIGHTOBJ":
@@ -81,9 +85,9 @@ def nrs_extract2d(input_model, slit_names=None, source_ids=None):
             output_model.source_ypos = 0.0
             output_model.source_xpos = 0.0
         if "world" in input_model.meta.wcs.available_frames:
-            orig_s_region = output_model.meta.wcsinfo.s_region.strip()
+            orig_s_region = str(output_model.meta.wcsinfo.s_region).strip()
             util.update_s_region_nrs_slit(output_model)
-            if orig_s_region != output_model.meta.wcsinfo.s_region.strip():
+            if orig_s_region != str(output_model.meta.wcsinfo.s_region).strip():
                 log.info(f"extract_2d updated S_REGION to {output_model.meta.wcsinfo.s_region}")
     else:
         output_model = datamodels.MultiSlitModel()
@@ -95,7 +99,7 @@ def nrs_extract2d(input_model, slit_names=None, source_ids=None):
             new_model, xlo, xhi, ylo, yhi = process_slit(input_model, slit)
 
             slits.append(new_model)
-            orig_s_region = new_model.meta.wcsinfo.s_region.strip()
+            orig_s_region = str(new_model.meta.wcsinfo.s_region).strip()
             # set x/ystart values relative to the image (screen) frame.
             # The overall subarray offset is recorded in model.meta.subarray.
             set_slit_attributes(new_model, slit, xlo, xhi, ylo, yhi)
@@ -117,7 +121,7 @@ def nrs_extract2d(input_model, slit_names=None, source_ids=None):
             # Update the S_REGION keyword value for the extracted slit
             if "world" in input_model.meta.wcs.available_frames:
                 util.update_s_region_nrs_slit(new_model)
-                if orig_s_region != new_model.meta.wcsinfo.s_region.strip():
+                if orig_s_region != str(new_model.meta.wcsinfo.s_region).strip():
                     log.info(f"Updated S_REGION to {new_model.meta.wcsinfo.s_region}")
 
             # Copy BUNIT values to output slit
@@ -146,6 +150,11 @@ def select_slits(open_slits, slit_names, source_ids):
     -------
     selected_open_slits : list
         List of slits selected by slit_name or source_id
+
+    Raises
+    ------
+    `~jwst.assign_wcs.util.NoDataOnDetectorError`
+        If no valid slits are selected.
     """
     open_slit_names = [str(x.name) for x in open_slits]
     open_slit_source_ids = [str(x.source_id) for x in open_slits]
@@ -156,7 +165,7 @@ def select_slits(open_slits, slit_names, source_ids):
             if this_slit in open_slit_names:
                 matched_slits.append(this_slit)
             else:
-                log.warn(f"Slit {this_slit} is not in the list of open slits.")
+                log.warning(f"Slit {this_slit} is not in the list of open slits.")
         for sub in open_slits:
             if str(sub.name) in matched_slits:
                 selected_open_slits.append(sub)
@@ -166,7 +175,7 @@ def select_slits(open_slits, slit_names, source_ids):
             if this_id in open_slit_source_ids:
                 matched_sources.append(this_id)
             else:
-                log.warn(f"Source id {this_id} is not in the list of open slits.")
+                log.warning(f"Source id {this_id} is not in the list of open slits.")
         for sub in open_slits:
             if str(sub.source_id) in matched_sources:
                 if sub not in selected_open_slits:
@@ -179,8 +188,9 @@ def select_slits(open_slits, slit_names, source_ids):
             log.info(f"Name: {this_slit.name}, source_id: {this_slit.source_id}")
         return selected_open_slits
     else:
-        log.info("All slits selected")
-        return open_slits
+        log_message = "No valid slits selected."
+        log.critical(log_message)
+        raise util.NoDataOnDetectorError(log_message)
 
 
 def process_slit(input_model, slit):
@@ -239,7 +249,7 @@ def set_slit_attributes(output_model, slit, xlo, xhi, ylo, yhi):
     log.debug(f"slit.ymin {slit.ymin}")
     if (
         output_model.meta.exposure.type.lower() in ["nrs_msaspec", "nrs_autoflat"]
-        or output_model.meta.instrument.lamp_mode.upper == "MSASPEC"
+        or str(output_model.meta.instrument.lamp_mode).upper() == "MSASPEC"
     ):
         # output_model.source_id = int(slit.source_id)
         output_model.source_name = slit.source_name
@@ -280,8 +290,8 @@ def offset_wcs(slit_wcs):
     xlo, xhi, ylo, yhi : tuple of floats
         Indices of the bounding box of the WCS
     """
-    xlo, xhi = _toindex(slit_wcs.bounding_box[0])
-    ylo, yhi = _toindex(slit_wcs.bounding_box[1])
+    xlo, xhi = to_index(slit_wcs.bounding_box[0])
+    ylo, yhi = to_index(slit_wcs.bounding_box[1])
 
     # Add the slit offset to each slit WCS object
     tr = slit_wcs.get_transform("detector", "sca")
@@ -328,7 +338,7 @@ def extract_slit(input_model, slit):
         ext_dq = input_model.dq[slit_slice].copy()
         ext_var_rnoise = input_model.var_rnoise[slit_slice].copy()
         ext_var_poisson = input_model.var_poisson[slit_slice].copy()
-        if pipe_utils.is_tso(input_model) and hasattr(input_model, "int_times"):
+        if pipe_utils.is_tso(input_model):
             log.debug("TSO data, so copying the INT_TIMES table.")
             int_times = input_model.int_times.copy()
         else:
@@ -363,7 +373,7 @@ class DitherMetadataError(Exception):
     Handle DitherMetadataError exception.
 
     This exception is raised if a Slit object doesn't have the required
-    dither attribute, or the x_ and y_ offsets aren't numeric.
+    dither attribute, or the x and y offsets aren't numeric.
     """
 
     pass

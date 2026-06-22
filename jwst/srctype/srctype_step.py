@@ -1,5 +1,4 @@
-#! /usr/bin/env python
-from stdatamodels.jwst import datamodels
+"""Determine if a spectroscopic source should be considered to be a point or extended object."""
 
 from jwst.srctype.srctype import set_source_type
 from jwst.stpipe import Step
@@ -30,29 +29,24 @@ class SourceTypeStep(Step):
 
         Parameters
         ----------
-        step_input : str, IFUImageModel, MultiSlitModel, or SlitModel
+        step_input : str, `~stdatamodels.jwst.datamodels.IFUImageModel`, \
+                     `~stdatamodels.jwst.datamodels.MultiSlitModel`, or \
+                     `~stdatamodels.jwst.datamodels.SlitModel`
             Either the path to the file or the science data model to be corrected.
 
         Returns
         -------
-        datamodel : IFUImageModel, MultiSlitModel, or SlitModel
-            Data model with keyword “SRCTYPE” populated with either “POINT” or “EXTENDED”.
+        output_model : `~stdatamodels.jwst.datamodels.IFUImageModel`, \
+                       `~stdatamodels.jwst.datamodels.MultiSlitModel`, or \
+                       `~stdatamodels.jwst.datamodels.SlitModel`
+            Data model with keyword "SRCTYPE" populated with either "POINT" or "EXTENDED".
         """
-        if self.source_type is not None:
-            self.source_type = self.source_type.upper()
+        output_model = self.prepare_output(step_input)
 
-        source_type = self.source_type  # retrieve command line override
-
-        input_model = datamodels.open(step_input)
-
-        # Call the source selection routine
-        result = set_source_type(input_model, source_type)
+        # Call the source selection routine on the output model
+        output_model = set_source_type(output_model, self.source_type)
 
         # Set the step status in the output model
-        if result is None:
-            result = input_model
-            result.meta.cal_step.srctype = "SKIPPED"
-        else:
-            result.meta.cal_step.srctype = "COMPLETE"
+        output_model.meta.cal_step.srctype = "COMPLETE"
 
-        return result
+        return output_model

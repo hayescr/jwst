@@ -18,6 +18,11 @@ from jwst.wavecorr import WavecorrStep, wavecorr
 def nrs_fs_model():
     hdul = create_nirspec_fs_file(grating="G140H", filter="F100LP")
     im = datamodels.ImageModel(hdul)
+    im.data = np.zeros((2048, 2048))
+    im.err = np.zeros((2048, 2048))
+    im.dq = np.zeros((2048, 2048), dtype=np.uint32)
+    im.var_rnoise = np.zeros((2048, 2048))
+    im.var_poisson = np.zeros((2048, 2048))
     im_wcs = AssignWcsStep.call(im)
     im_ex2d = Extract2dStep.call(im_wcs)
     yield im_ex2d
@@ -33,10 +38,14 @@ def nrs_slit_model(nrs_fs_model):
 
     # make a slit model to run through correction
     slit = datamodels.SlitModel(im_ex2d.slits[0].data)
+    slit.wavelength = im_ex2d.slits[0].wavelength
     slit.update(im_ex2d)
     slit.meta.wcs = im_ex2d.slits[0].meta.wcs
     slit.source_type = "POINT"
+    slit.source_xpos = 0.1
     slit.name = "S1600A1"
+    slit.var_rnoise = im_ex2d.slits[0].var_rnoise
+    slit.var_poisson = im_ex2d.slits[0].var_poisson
     yield slit
     slit.close()
 
@@ -47,6 +56,11 @@ def test_wavecorr():
     hdul[0].header["MSAMETFL"] = msa_meta
     hdul[0].header["MSAMETID"] = 12
     im = datamodels.ImageModel(hdul)
+    im.data = np.zeros((2048, 2048))
+    im.err = np.zeros((2048, 2048))
+    im.dq = np.zeros((2048, 2048), dtype=np.uint32)
+    im.var_rnoise = np.zeros((2048, 2048))
+    im.var_poisson = np.zeros((2048, 2048))
     im_wcs = AssignWcsStep.call(im)
     im_ex2d = Extract2dStep.call(im_wcs)
     bbox = ((-0.5, 1432.5), (-0.5, 37.5))
@@ -59,6 +73,11 @@ def test_wavecorr():
     # the mock msa source is an extended source, change to point for testing
     im_src.slits[0].source_type = "POINT"
     im_wave = WavecorrStep.call(im_src)
+
+    # step is marked complete; input is not modified
+    assert im_wave.meta.cal_step.wavecorr == "COMPLETE"
+    assert im_src is not im_wave
+    assert im_src.meta.cal_step.wavecorr is None
 
     # test dispersion is of the correct order
     # there's one slit only
@@ -120,8 +139,7 @@ def test_ideal_to_v23_fs():
     assert_allclose(id2v.inverse(v2_ref, v3_ref), (0, 0))
 
 
-def test_skipped():
-    """Test all conditions that lead to skipping wavecorr."""
+def test_skip_invalid_exptype():
     hdul = create_nirspec_fs_file(grating="G140H", filter="F100LP")
     im = datamodels.ImageModel(hdul)
 
@@ -130,10 +148,29 @@ def test_skipped():
     out = WavecorrStep.call(im)
     assert out.meta.cal_step.wavecorr == "SKIPPED"
 
+    # input is not modified
+    assert out is not im
+    assert im.meta.cal_step.wavecorr is None
+
+
+def test_skip_missing_prerequisites():
+    hdul = create_nirspec_fs_file(grating="G140H", filter="F100LP")
+    im = datamodels.ImageModel(hdul)
+
     # Test an error is raised if assign_wcs or extract_2d were not run.
     im.meta.exposure.type = "NRS_FIXEDSLIT"
     with pytest.raises(TypeError):
         WavecorrStep.call(im)
+
+
+def test_reference_file_requirements():
+    hdul = create_nirspec_fs_file(grating="G140H", filter="F100LP")
+    im = datamodels.ImageModel(hdul)
+    im.data = np.zeros((2048, 2048))
+    im.err = np.zeros((2048, 2048))
+    im.dq = np.zeros((2048, 2048), dtype=np.uint32)
+    im.var_rnoise = np.zeros((2048, 2048))
+    im.var_poisson = np.zeros((2048, 2048))
 
     outa = AssignWcsStep.call(im)
 
@@ -167,10 +204,15 @@ def test_skipped():
     outs.meta.observation.date = "2001-08-03"
     outw = WavecorrStep.call(outs)
     assert outw.meta.cal_step.wavecorr == "SKIPPED"
-    outs.meta.observation.date = "2017-08-03"
+    assert outw is not outs
+    assert outs.meta.cal_step.wavecorr is None
 
     # Run the step for real
+    outs.meta.observation.date = "2017-08-03"
     outw = WavecorrStep.call(outs)
+    assert outw.meta.cal_step.wavecorr == "COMPLETE"
+    assert outw is not outs
+    assert outs.meta.cal_step.wavecorr is None
 
     # Test if the corrected wavelengths are not monotonically increasing
 
@@ -199,6 +241,11 @@ def test_mos_slit_status():
     hdul[0].header["MSAMETFL"] = msa_meta
     hdul[0].header["MSAMETID"] = 12
     im = datamodels.ImageModel(hdul)
+    im.data = np.zeros((2048, 2048))
+    im.err = np.zeros((2048, 2048))
+    im.dq = np.zeros((2048, 2048), dtype=np.uint32)
+    im.var_rnoise = np.zeros((2048, 2048))
+    im.var_poisson = np.zeros((2048, 2048))
     im_wcs = AssignWcsStep.call(im)
     im_ex2d = Extract2dStep.call(im_wcs)
     bbox = ((-0.5, 1432.5), (-0.5, 37.5))
@@ -216,6 +263,10 @@ def test_mos_slit_status():
     # since no slits were corrected
     assert im_wave.meta.cal_step.wavecorr == "SKIPPED"
 
+    # input is not modified
+    assert im_wave is not im_src
+    assert im_src.meta.cal_step.wavecorr is None
+
     # check that wavelength_corrected is False for extended mos sources
     assert im_wave.slits[0].wavelength_corrected is False
 
@@ -229,10 +280,18 @@ def test_mos_slit_status():
     # check that wavelength_corrected is True for mos point sources
     assert im_wave.slits[0].wavelength_corrected is True
 
+    # input is still not modified
+    assert im_wave is not im_src
+    assert im_src.meta.cal_step.wavecorr is None
+
 
 def test_wavecorr_fs():
     hdul = create_nirspec_fs_file(grating="PRISM", filter="CLEAR")
     im = datamodels.ImageModel(hdul)
+    im.err = np.zeros((2048, 2048))
+    im.dq = np.zeros((2048, 2048), dtype=np.uint32)
+    im.var_rnoise = np.zeros((2048, 2048))
+    im.var_poisson = np.zeros((2048, 2048))
     dither = {"x_offset": -0.0264, "y_offset": 1.089798712}
 
     im.meta.dither = dither
@@ -258,7 +317,7 @@ def test_wavecorr_fs():
         "waverange_end": 5.3e-06,
         "waverange_start": 6e-07,
     }
-
+    im.data = np.zeros((2048, 2048))
     result = AssignWcsStep.call(im)
     result = Extract2dStep.call(result)
     bbox = ((-0.5, 428.5), (-0.5, 38.5))
@@ -323,6 +382,10 @@ def test_assign_wcs_skipped():
     result = WavecorrStep.call(im)
     assert result.meta.cal_step.wavecorr == "SKIPPED"
 
+    # input is not modified
+    assert result is not im
+    assert im.meta.cal_step.wavecorr is None
+
     hdul.close()
     im.close()
     result.close()
@@ -354,6 +417,10 @@ def test_invalid_slit(nrs_slit_model):
     result = WavecorrStep.call(slit)
     assert result.meta.cal_step.wavecorr == "SKIPPED"
 
+    # input is not modified
+    assert result is not slit
+    assert slit.meta.cal_step.wavecorr is None
+
 
 @pytest.mark.parametrize("source_type", ["POINT", "EXTENDED"])
 def test_slitmodel(source_type, nrs_slit_model):
@@ -365,6 +432,10 @@ def test_slitmodel(source_type, nrs_slit_model):
         assert result.meta.cal_step.wavecorr == "COMPLETE"
     else:
         assert result.meta.cal_step.wavecorr == "SKIPPED"
+
+    # input is not modified
+    assert result is not slit
+    assert slit.meta.cal_step.wavecorr is None
 
     slit.close()
     result.close()

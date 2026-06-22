@@ -1,7 +1,4 @@
 import multiprocessing
-import os
-import platform
-import time
 from itertools import cycle
 
 import numpy as np
@@ -10,6 +7,8 @@ from numpy.testing import assert_array_equal
 from stdatamodels.jwst.datamodels import GainModel, RampModel, ReadnoiseModel, dqflags
 
 from jwst.jump import JumpStep
+from jwst.lib.tests.helpers import make_sub64p_multistripe_model
+from jwst.refpix.refpix_step import RefPixStep
 
 MAXIMUM_CORES = ["2", "none", "quarter", "half", "all"]
 
@@ -515,99 +514,6 @@ def test_snowball_flagging_sat(generate_nircam_reffiles, setup_inputs):
 
 
 # --------  Brought over from detect jumps --------
-
-
-def test_exec_time_0_crs(setup_inputs):
-    """ "Set up with dimension similar to simulated MIRI datasets.
-
-    Dataset has no cosmic rays. Test only the execution time of jump detection
-    for comparison with nominal time; hopefully indicative of faults with newly
-    added code.
-    """
-    model1, gdq, rnoise, pixdq, err, gain = setup_inputs(
-        ngroups=10,
-        nrows=1024,
-        ncols=1032,
-        nints=2,
-        readnoise=6.5,
-        gain=5.5,
-        grouptime=2.775,
-        deltatime=2.775,
-    )
-
-    tstart = time.monotonic()
-
-    # using dummy variable in next to prevent "F841-variable is assigned to but never used"
-    _ = JumpStep.call(
-        model1,
-        override_gain=gain,
-        override_readnoise=rnoise,
-        rejection_threshold=4.0,
-        three_group_rejection_threshold=5.0,
-        four_group_rejection_threshold=6.0,
-        maximum_cores="none",
-        max_jump_to_flag_neighbors=200,
-        min_jump_to_flag_neighbors=4,
-        flag_4_neighbors=True,
-    )
-    tstop = time.monotonic()
-
-    t_elapsed = tstop - tstart
-    if platform.system() == "Darwin" and os.environ.get("CI", False):
-        # github mac runners have known performance issues see:
-        # https://github.com/actions/runner-images/issues/1336
-        # use a longer MAX_TIME when running on github on a mac
-        MAX_TIME = 20
-    else:
-        MAX_TIME = 10  # takes 1.6 sec on my Mac
-
-    assert t_elapsed < MAX_TIME
-
-
-def test_exec_time_many_crs(setup_inputs):
-    """ "Set up with dimension similar to simulated MIRI datasets.
-
-    Dataset has many cosmic rays; approximately one CR per 4 groups. Test only
-    the execution time of jump detection for comparison with nominal time;
-    hopefully indicative of faults with newly added code.
-    """
-    nrows = 350
-    ncols = 400
-
-    model1, gdq, rnoise, pixdq, err, gain = setup_inputs(
-        ngroups=10,
-        nrows=nrows,
-        ncols=ncols,
-        nints=2,
-        readnoise=6.5,
-        gain=5.5,
-        grouptime=2.775,
-        deltatime=2.775,
-    )
-
-    crs_frac = 0.25  # fraction of groups having a CR
-    model1 = add_crs(model1, crs_frac)  # add desired fraction of CRs
-
-    tstart = time.time()
-    # using dummy variable in next to prevent "F841-variable is assigned to but never used"
-    _ = JumpStep.call(
-        model1,
-        override_gain=gain,
-        override_readnoise=rnoise,
-        rejection_threshold=4.0,
-        three_group_rejection_threshold=5.0,
-        four_group_rejection_threshold=6.0,
-        maximum_cores="none",
-        max_jump_to_flag_neighbors=200,
-        min_jump_to_flag_neighbors=4,
-        flag_4_neighbors=True,
-    )
-    tstop = time.time()
-
-    t_elapsed = tstop - tstart
-    MAX_TIME = 600  # takes ~100 sec on my Mac
-
-    assert t_elapsed < MAX_TIME
 
 
 def test_nocrs_noflux(setup_inputs):
@@ -2108,6 +2014,64 @@ def test_cr_neighbor_sat_flagging(setup_inputs):
     assert dq_out[0, 4, 5, 1] == SATURATED
 
 
-"""
-test_cr_neighbor_sat_flagging
-"""
+def test_output_is_not_input(generate_miri_reffiles, setup_inputs):
+    """Test that input is not modified when step completes."""
+    override_gain, override_readnoise = generate_miri_reffiles()
+
+    ngroups = 3
+    xsize = 103
+    ysize = 102
+    model1, _, _, _, _, _ = setup_inputs(
+        ngroups=ngroups,
+        nrows=ysize,
+        ncols=xsize,
+    )
+
+    out_model = JumpStep.call(
+        model1,
+        override_gain=override_gain,
+        override_readnoise=override_readnoise,
+    )
+    assert out_model.meta.cal_step.jump == "COMPLETE"
+
+    # Input is not modified
+    assert out_model is not model1
+    assert model1.meta.cal_step.jump is None
+
+
+def test_output_is_not_input_when_skipped(generate_miri_reffiles, setup_inputs):
+    """Test that input is not modified when step is skipped."""
+    override_gain, override_readnoise = generate_miri_reffiles()
+    model1, _, _, _, _, _ = setup_inputs(ngroups=2)
+    out_model = JumpStep.call(
+        model1,
+        override_gain=override_gain,
+        override_readnoise=override_readnoise,
+    )
+    assert out_model.meta.cal_step.jump == "SKIPPED"
+
+    # Input is not modified
+    assert out_model is not model1
+    assert model1.meta.cal_step.jump is None
+
+
+def test_uneven_sampling(caplog):
+    caplog.set_level("DEBUG", "jwst")
+
+    # Superstripe ramp model with in-frame reads: readout times are not evenly sampled
+    model = make_sub64p_multistripe_model()
+    model.pixeldq = model.get_default("pixeldq")
+    collated = RefPixStep.call(model)
+    assert len(collated.meta.exposure.read_times) > 0
+
+    # Set the data equal to the read time
+    for group in range(collated.data.shape[1]):
+        collated.data[:, group, :, :] = collated.meta.exposure.read_times[group][0]
+
+    # Don't configure the log, so that caplog picks up the messages correctly.
+    jump = JumpStep.call(collated, configure_log=False)
+    assert "Using explicit read times" in caplog.text
+
+    # No jumps expected, since data matches readtimes
+    assert jump.meta.exposure.extended_emission_events == 0
+    assert not np.any(jump.groupdq & JUMP_DET > 0)

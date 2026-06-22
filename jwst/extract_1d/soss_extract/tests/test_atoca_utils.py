@@ -1,8 +1,10 @@
 import logging
+import pickle
 
 import numpy as np
 import pytest
 from scipy.integrate import trapezoid
+from scipy.sparse import linalg
 
 from jwst.extract_1d.soss_extract import atoca_utils as au
 from jwst.tests.helpers import LogWatcher
@@ -373,6 +375,39 @@ def test_throughput_soss():
         au.throughput_soss(wavelengths, throughputs[:-1])
 
 
+def test_throughput_soss_pickleable():
+    """Test that ThroughputInterpolator objects can be pickled and unpickled correctly."""
+    wavelengths = np.linspace(2, 5, 20)
+    throughputs = np.sin(wavelengths) + 1  # varying throughput function
+    interpolator = au.throughput_soss(wavelengths, throughputs)
+
+    # Test wavelengths for evaluation
+    wl_test = np.linspace(2.5, 4.5, 15)
+
+    # Get results before pickling
+    result_before = interpolator(wl_test)
+
+    # Pickle and unpickle the interpolator
+    pickled = pickle.dumps(interpolator)
+    interpolator_restored = pickle.loads(pickled)
+
+    # Verify all attributes are preserved
+    assert np.allclose(interpolator_restored.wavelength, interpolator.wavelength)
+    assert np.allclose(interpolator_restored.throughput, interpolator.throughput)
+    assert np.allclose(interpolator_restored.wl_min, interpolator.wl_min)
+    assert np.allclose(interpolator_restored.wl_max, interpolator.wl_max)
+
+    # Verify the interpolator was recreated and works correctly
+    result_after = interpolator_restored(wl_test)
+    assert np.allclose(result_before, result_after)
+
+    # Test edge cases (clipping behavior)
+    wl_outside = np.array([1.5, 2.0, 3.0, 5.0, 5.5])
+    result_outside_before = interpolator(wl_outside)
+    result_outside_after = interpolator_restored(wl_outside)
+    assert np.allclose(result_outside_before, result_outside_after)
+
+
 def test_webb_kernel(webb_kernels, wave_map):
     wave_trace = wave_map[0][0]
     min_trace, max_trace = np.min(wave_trace), np.max(wave_trace)
@@ -436,6 +471,43 @@ def test_webb_kernel(webb_kernels, wave_map):
         kern(wl_test, wl_test[:-1])
 
 
+def test_webb_kernel_pickleable(webb_kernels, wave_map):
+    """Test that WebbKernel objects can be pickled and unpickled correctly."""
+    kern = webb_kernels[0]
+    wave_trace = wave_map[0][0]
+    min_trace, max_trace = np.min(wave_trace), np.max(wave_trace)
+
+    # Test wavelengths and pixels for evaluation
+    wl_test = np.linspace(min_trace, max_trace, 10)
+    pix_half = kern.n_pix // 2
+    pixels_test = np.array([-pix_half - 1, 0, pix_half, pix_half + 1])
+
+    # Get results before pickling
+    f_ker_before = kern.f_ker(pixels_test, wl_test)
+    call_before = kern(wl_test, wl_test)
+
+    # Pickle and unpickle the kernel
+    pickled = pickle.dumps(kern)
+    kern_restored = pickle.loads(pickled)
+
+    # Verify all attributes are preserved
+    assert np.allclose(kern_restored.n_pix, kern.n_pix)
+    assert np.allclose(kern_restored.pixels, kern.pixels)
+    assert np.allclose(kern_restored.wave_kernels, kern.wave_kernels)
+    assert np.allclose(kern_restored.wave_center, kern.wave_center)
+    assert np.allclose(kern_restored.poly, kern.poly)
+    assert np.allclose(kern_restored.kernels, kern.kernels)
+    assert np.allclose(kern_restored.min_value, kern.min_value)
+
+    # Verify the interpolator was recreated and works correctly
+    f_ker_after = kern_restored.f_ker(pixels_test, wl_test)
+    assert np.allclose(f_ker_before, f_ker_after)
+
+    # Verify the __call__ method works correctly
+    call_after = kern_restored(wl_test, wl_test)
+    assert np.allclose(call_before, call_after)
+
+
 def test_finite_first_diff():
     wave_grid = np.linspace(0, 2 * np.pi, 100)
     test_0 = np.ones_like(wave_grid)
@@ -495,3 +567,66 @@ def test_get_c_matrix(kernels_unity, webb_kernels, wave_grid):
     with pytest.raises(ValueError):
         kern_array_bad = kern_array[1:, 1:]
         au.get_c_matrix(kern_array_bad, wave_grid, i_bounds=i_bounds)
+
+
+def test_try_solve_two_methods(kernels_unity, webb_kernels, wave_grid):
+    kern = webb_kernels[0]
+    matrix = au.get_c_matrix(kern, wave_grid, i_bounds=None)
+    result = np.arange(matrix.shape[0])
+
+    # A finite solution is found
+    solution = au.try_solve_two_methods(matrix, result)
+    assert solution.shape == (matrix.shape[1],)
+    assert np.all(np.isfinite(solution))
+
+
+def test_try_solve_two_methods_spsolve_fail(monkeypatch, kernels_unity, webb_kernels, wave_grid):
+    kern = webb_kernels[0]
+    matrix = au.get_c_matrix(kern, wave_grid, i_bounds=None)
+    result = np.arange(matrix.shape[0])
+
+    # Monkeypatch a failure in the first method
+    def mock_spsolve(*args):
+        raise linalg.MatrixRankWarning()
+
+    monkeypatch.setattr(au, "spsolve", mock_spsolve)
+
+    # A finite solution is found by the second method
+    watcher = LogWatcher("ATOCA matrix solve failed with spsolve")
+    monkeypatch.setattr(
+        logging.getLogger("jwst.extract_1d.soss_extract.atoca_utils"), "warning", watcher
+    )
+
+    solution = au.try_solve_two_methods(matrix, result)
+    assert solution.shape == (matrix.shape[1],)
+    assert np.all(np.isfinite(solution))
+
+    watcher.assert_seen()
+
+
+def test_try_solve_two_methods_both_fail(monkeypatch, kernels_unity, webb_kernels, wave_grid):
+    kern = webb_kernels[0]
+    matrix = au.get_c_matrix(kern, wave_grid, i_bounds=None)
+    result = np.arange(matrix.shape[0])
+
+    # Monkeypatch a failure in the both methods
+    def mock_spsolve(*args):
+        raise linalg.MatrixRankWarning("Bad matrix")
+
+    def mock_lsqr(*args):
+        raise ValueError("Bad matrix")
+
+    monkeypatch.setattr(au, "spsolve", mock_spsolve)
+    monkeypatch.setattr(au, "lsqr", mock_lsqr)
+
+    watcher = LogWatcher("No solution found")
+    monkeypatch.setattr(
+        logging.getLogger("jwst.extract_1d.soss_extract.atoca_utils"), "warning", watcher
+    )
+
+    # Both methods fail: the solution is all NaN
+    solution = au.try_solve_two_methods(matrix, result)
+    assert solution.shape == (matrix.shape[1],)
+    assert np.all(np.isnan(solution))
+
+    watcher.assert_seen()

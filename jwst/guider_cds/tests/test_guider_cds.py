@@ -4,29 +4,14 @@ from crds import getreferences
 
 from jwst import datamodels
 from jwst.guider_cds.guider_cds import guider_cds
+from jwst.guider_cds.guider_cds_step import GuiderCdsStep
+from jwst.guider_cds.tests.helpers import make_guider_image
 
 
 @pytest.fixture
 def make_guider_image_and_refs():
-    """Generate science image."""
-
-    image = datamodels.GuiderRawModel()
-
-    image.meta.instrument.name = "FGS"
-    image.meta.instrument.detector = "GUIDER1"
-    image.meta.observation.date = "2016-04-07"
-    image.meta.observation.time = "14:44:57"
-    image.meta.exposure.frame_time = 234.3423235
-    image.meta.exposure.ngroups = 4
-    image.meta.exposure.group_time = 465.643643
-    image.meta.exposure.type = "FGS_FINEGUIDE"
-
-    image.data = np.random.rand(4, 10, 10, 10)
-    image.meta.subarray.xstart = 1226
-    image.meta.subarray.ystart = 209
-    image.meta.subarray.xsize = 10
-    image.meta.subarray.ysize = 10
-
+    """Generate science image and fetch references."""
+    image = make_guider_image()
     refs = getreferences(image, reftypes=["gain", "readnoise"])
     gain_model = datamodels.GainModel(refs["gain"])
     readnoise_model = datamodels.ReadnoiseModel(refs["gain"])
@@ -152,3 +137,38 @@ def test_err_nonzero(make_guider_image_and_refs):
     result = guider_cds(model, gain_model, readnoise_model)
 
     assert result.err.max() > 0
+
+
+def test_step_call_succeeds(make_guider_image_and_refs):
+    model, gain_model, readnoise_model = make_guider_image_and_refs
+
+    result = GuiderCdsStep.call(model, override_gain=gain_model, override_readnoise=readnoise_model)
+    assert result.meta.cal_step.guider_cds == "COMPLETE"
+
+    # Input is not modified
+    assert result is not model
+    assert model.meta.cal_step.guider_cds is None
+
+
+def test_step_call_no_gain(caplog, make_guider_image_and_refs):
+    model, _, _ = make_guider_image_and_refs
+
+    result = GuiderCdsStep.call(model, override_gain="N/A")
+    assert result.meta.cal_step.guider_cds == "SKIPPED"
+    assert "No GAIN reference file found" in caplog.text
+
+    # Input is not modified
+    assert result is not model
+    assert model.meta.cal_step.guider_cds is None
+
+
+def test_step_call_no_readnoise(caplog, make_guider_image_and_refs):
+    model, _, _ = make_guider_image_and_refs
+
+    result = GuiderCdsStep.call(model, override_readnoise="N/A")
+    assert result.meta.cal_step.guider_cds == "SKIPPED"
+    assert "No READNOISE reference file found" in caplog.text
+
+    # Input is not modified
+    assert result is not model
+    assert model.meta.cal_step.guider_cds is None
